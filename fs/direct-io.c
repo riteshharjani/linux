@@ -128,7 +128,7 @@ struct dio {
 	/* BIO completion state */
 	spinlock_t bio_lock;		/* protects BIO fields below */
 	int page_errors;		/* errno from get_user_pages() */
-	int is_async;			/* is IO async ? */
+	bool is_async;			/* is IO async ? */
 	bool defer_completion;		/* defer AIO completion to workqueue? */
 	bool should_dirty;		/* if pages should be dirtied */
 	int io_error;			/* IO error in completion path */
