@@ -229,18 +229,18 @@ filesystem.  As of kernel 2.6.22, the following members are defined:
 	struct super_operations {
 		struct inode *(*alloc_inode)(struct super_block *sb);
 		void (*destroy_inode)(struct inode *);
+		void (*free_inode)(struct inode *);
 
 		void (*dirty_inode) (struct inode *, int flags);
 		int (*write_inode) (struct inode *, int);
 		void (*drop_inode) (struct inode *);
-		void (*delete_inode) (struct inode *);
+		void (*evict_inode) (struct inode *);
 		void (*put_super) (struct super_block *);
 		int (*sync_fs)(struct super_block *sb, int wait);
 		int (*freeze_fs) (struct super_block *);
 		int (*unfreeze_fs) (struct super_block *);
 		int (*statfs) (struct dentry *, struct kstatfs *);
 		int (*remount_fs) (struct super_block *, int *, char *);
-		void (*clear_inode) (struct inode *);
 		void (*umount_begin) (struct super_block *);
 
 		int (*show_options)(struct seq_file *, struct dentry *);
@@ -269,6 +269,12 @@ or bottom half).
 	->alloc_inode was defined and simply undoes anything done by
 	->alloc_inode.
 
+``free_inode``
+	This is the last part of resource freeing for inode done
+	in RCU-delayed way. This is called at the end by
+	destroy_inode method using call_rcu, mostly to free FS specific
+	inodep cache object.
+
 ``dirty_inode``
 	this method is called by the VFS to mark an inode dirty.
 
@@ -283,15 +289,22 @@ or bottom half).
 
 	This method should be either NULL (normal UNIX filesystem
 	semantics) or "generic_delete_inode" (for filesystems that do
-	not want to cache inodes - causing "delete_inode" to always be
+	not want to cache inodes - causing "evict_inode" to always be
 	called regardless of the value of i_nlink)
 
 	The "generic_delete_inode()" behavior is equivalent to the old
 	practice of using "force_delete" in the put_inode() case, but
 	does not have the races that the "force_delete()" approach had.
 
-``delete_inode``
-	called when the VFS wants to delete an inode
+``evict_inode``
+	Called by iput_final when the inode reference count reaches
+	zero and the inode is not in lru list. Method is used to clean anything
+	by FS that needs to be, before the inode is completely destroyed and
+	put on the free list.
+	For stacked filesystems, this is the place where the reference of
+	lower inodes are dropped.
+	For local filesystems, this is the place to truncate all pages
+	before inode dies and also to perform necessary cleanup.
 
 ``put_super``
 	called when the VFS wishes to free the superblock
@@ -317,9 +330,6 @@ or bottom half).
 ``remount_fs``
 	called when the filesystem is remounted.  This is called with
 	the kernel lock held
-
-``clear_inode``
-	called then the VFS clears the inode.  Optional
 
 ``umount_begin``
 	called when the VFS is unmounting a filesystem.
