@@ -3513,11 +3513,13 @@ static int ext4_iomap_begin(struct inode *inode, loff_t offset, loff_t length,
 			}
 		}
 	} else if (flags & IOMAP_WRITE) {
-		int dio_credits;
 		handle_t *handle;
-		int retries = 0;
+		int dio_credits, retries = 0, m_flags = 0;
 
-		/* Trim mapping request to maximum we can map at once for DIO */
+		/*
+		 * Trim mapping request to maximum we can map at once
+		 * for DIO.
+		 */
 		if (map.m_len > DIO_MAX_BLOCKS)
 			map.m_len = DIO_MAX_BLOCKS;
 		dio_credits = ext4_chunk_trans_blocks(inode, map.m_len);
@@ -3533,8 +3535,30 @@ retry:
 		if (IS_ERR(handle))
 			return PTR_ERR(handle);
 
-		ret = ext4_map_blocks(handle, inode, &map,
-				      EXT4_GET_BLOCKS_CREATE_ZERO);
+		/*
+		 * DAX and direct IO are the only two operations that
+		 * are currently supported with IOMAP_WRITE.
+		 */
+		WARN_ON(!IS_DAX(inode) && !(flags & IOMAP_DIRECT));
+		if (IS_DAX(inode))
+			m_flags = EXT4_GET_BLOCKS_CREATE_ZERO;
+		else if (round_down(offset, i_blocksize(inode)) >=
+			 i_size_read(inode))
+			m_flags = EXT4_GET_BLOCKS_CREATE;
+		else if (ext4_test_inode_flag(inode, EXT4_INODE_EXTENTS))
+			m_flags = EXT4_GET_BLOCKS_IO_CREATE_EXT;
+
+		ret = ext4_map_blocks(handle, inode, &map, m_flags);
+
+		/*
+		 * We cannot fill holes in indirect tree based inodes
+		 * as that could expose stale data in the case of a
+		 * crash. Use the magic error code to fallback to
+		 * buffered IO.
+		 */
+		if (!m_flags && !ret)
+			ret = -ENOTBLK;
+
 		if (ret < 0) {
 			ext4_journal_stop(handle);
 			if (ret == -ENOSPC &&
@@ -3544,13 +3568,14 @@ retry:
 		}
 
 		/*
-		 * If we added blocks beyond i_size, we need to make sure they
-		 * will get truncated if we crash before updating i_size in
-		 * ext4_iomap_end(). For faults we don't need to do that (and
-		 * even cannot because for orphan list operations inode_lock is
-		 * required) - if we happen to instantiate block beyond i_size,
-		 * it is because we race with truncate which has already added
-		 * the inode to the orphan list.
+		 * If we added blocks beyond i_size, we need to make
+		 * sure they will get truncated if we crash before
+		 * updating the i_size. For faults we don't need to do
+		 * that (and even cannot because for orphan list
+		 * operations inode_lock is required) - if we happen
+		 * to instantiate block beyond i_size, it is because
+		 * we race with truncate which has already added the
+		 * inode to the orphan list.
 		 */
 		if (!(flags & IOMAP_FAULT) && first_block + map.m_len >
 		    (i_size_read(inode) + (1 << blkbits) - 1) >> blkbits) {
@@ -3612,6 +3637,14 @@ retry:
 static int ext4_iomap_end(struct inode *inode, loff_t offset, loff_t length,
 			  ssize_t written, unsigned flags, struct iomap *iomap)
 {
+	/*
+	 * Check to see whether an error occurred while writing data
+	 * out to allocated blocks. If so, return the magic error code
+	 * so that we fallback to buffered IO and reuse the blocks
+	 * that were allocated in preparation for the direct IO write.
+	 */
+	if (flags & IOMAP_DIRECT && written == 0)
+		return -ENOTBLK;
 	return 0;
 }
 

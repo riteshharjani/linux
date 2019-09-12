@@ -29,6 +29,7 @@
 #include <linux/pagevec.h>
 #include <linux/uio.h>
 #include <linux/mman.h>
+#include <linux/backing-dev.h>
 #include "ext4.h"
 #include "ext4_jbd2.h"
 #include "xattr.h"
@@ -213,12 +214,16 @@ static ssize_t ext4_write_checks(struct kiocb *iocb, struct iov_iter *from)
 	struct inode *inode = file_inode(iocb->ki_filp);
 	ssize_t ret;
 
+	if (unlikely(IS_IMMUTABLE(inode)))
+		return -EPERM;
+
 	ret = generic_write_checks(iocb, from);
 	if (ret <= 0)
 		return ret;
 
-	if (unlikely(IS_IMMUTABLE(inode)))
-		return -EPERM;
+	ret = file_modified(iocb->ki_filp);
+	if (ret)
+		return 0;
 
 	/*
 	 * If we have encountered a bitmap-format file, the size limit
@@ -232,6 +237,32 @@ static ssize_t ext4_write_checks(struct kiocb *iocb, struct iov_iter *from)
 		iov_iter_truncate(from, sbi->s_bitmap_maxbytes - iocb->ki_pos);
 	}
 	return iov_iter_count(from);
+}
+
+static ssize_t ext4_buffered_write_iter(struct kiocb *iocb,
+					struct iov_iter *from)
+{
+	ssize_t ret;
+	struct inode *inode = file_inode(iocb->ki_filp);
+
+	if (iocb->ki_flags & IOCB_NOWAIT)
+		return -EOPNOTSUPP;
+
+	inode_lock(inode);
+	ret = ext4_write_checks(iocb, from);
+	if (ret <= 0)
+		goto out;
+
+	current->backing_dev_info = inode_to_bdi(inode);
+	ret = generic_perform_write(iocb->ki_filp, from, iocb->ki_pos);
+	current->backing_dev_info = NULL;
+out:
+	inode_unlock(inode);
+	if (likely(ret > 0)) {
+		iocb->ki_pos += ret;
+		ret = generic_write_sync(iocb, ret);
+	}
+	return ret;
 }
 
 static int ext4_handle_inode_extension(struct inode *inode, loff_t offset,
@@ -310,6 +341,120 @@ static int ext4_handle_failed_inode_extension(struct inode *inode, loff_t size)
 	return 0;
 }
 
+/*
+ * For a write that extends the inode size, ext4_dio_write_iter() will
+ * wait for the write to complete. Consequently, operations performed
+ * within this function are still covered by the inode_lock(). On
+ * success, this function returns 0.
+ */
+static int ext4_dio_write_end_io(struct kiocb *iocb, ssize_t size, int error,
+				 unsigned int flags)
+{
+	int ret;
+	loff_t offset = iocb->ki_pos;
+	struct inode *inode = file_inode(iocb->ki_filp);
+
+	if (error) {
+		ret = ext4_handle_failed_inode_extension(inode, offset + size);
+		return ret ? ret : error;
+	}
+
+	if (flags & IOMAP_DIO_UNWRITTEN) {
+		ret = ext4_convert_unwritten_extents(NULL, inode,
+						     offset, size);
+		if (ret)
+			return ret;
+	}
+
+	if (offset + size > i_size_read(inode)) {
+		ret = ext4_handle_inode_extension(inode, offset, size, 0);
+		if (ret)
+			return ret;
+	}
+	return 0;
+}
+
+static ssize_t ext4_dio_write_iter(struct kiocb *iocb, struct iov_iter *from)
+{
+	ssize_t ret;
+	size_t count;
+	loff_t offset = iocb->ki_pos;
+	struct inode *inode = file_inode(iocb->ki_filp);
+	bool extend = false, overwrite = false, unaligned_aio = false;
+
+	if (!inode_trylock(inode)) {
+		if (iocb->ki_flags & IOCB_NOWAIT)
+			return -EAGAIN;
+		inode_lock(inode);
+	}
+
+	if (!ext4_dio_checks(inode)) {
+		inode_unlock(inode);
+		/*
+		 * Fallback to buffered IO if the operation on the
+		 * inode is not supported by direct IO.
+		 */
+		return ext4_buffered_write_iter(iocb, from);
+	}
+
+	ret = ext4_write_checks(iocb, from);
+	if (ret <= 0) {
+		inode_unlock(inode);
+		return ret;
+	}
+
+	/*
+	 * Unaligned direct AIO must be serialized among each other as
+	 * the zeroing of partial blocks of two competing unaligned
+	 * AIOs can result in data corruption.
+	 */
+	if (ext4_test_inode_flag(inode, EXT4_INODE_EXTENTS) &&
+	    !is_sync_kiocb(iocb) && ext4_unaligned_aio(inode, from, offset)) {
+		unaligned_aio = true;
+		inode_dio_wait(inode);
+	}
+
+	/*
+	 * Determine whether the IO operation will overwrite allocated
+	 * and initialized blocks. If so, check to see whether it is
+	 * possible to take the dioread_nolock path.
+	 */
+	count = iov_iter_count(from);
+	if (!unaligned_aio && ext4_overwrite_io(inode, offset, count) &&
+	    ext4_should_dioread_nolock(inode)) {
+		overwrite = true;
+		downgrade_write(&inode->i_rwsem);
+	}
+
+	if (offset + count > i_size_read(inode) ||
+	    offset + count > EXT4_I(inode)->i_disksize) {
+		ext4_update_i_disksize(inode, inode->i_size);
+		extend = true;
+	}
+
+	ret = iomap_dio_rw(iocb, from, &ext4_iomap_ops, ext4_dio_write_end_io);
+
+	/*
+	 * Unaligned direct AIO must be the only IO in flight or else
+	 * any overlapping aligned IO after unaligned IO might result
+	 * in data corruption. We also need to wait here in the case
+	 * where the inode is being extended so that inode extension
+	 * routines in ext4_dio_write_end_io() are covered by the
+	 * inode_lock().
+	 */
+	if (ret == -EIOCBQUEUED && (unaligned_aio || extend))
+		inode_dio_wait(inode);
+
+	if (overwrite)
+		inode_unlock_shared(inode);
+	else
+		inode_unlock(inode);
+
+	if (ret >= 0 && iov_iter_count(from))
+		return ext4_buffered_write_iter(iocb, from);
+	return ret;
+}
+
 #ifdef CONFIG_FS_DAX
 static ssize_t
 ext4_dax_write_iter(struct kiocb *iocb, struct iov_iter *from)
@@ -324,14 +469,9 @@ ext4_dax_write_iter(struct kiocb *iocb, struct iov_iter *from)
 			return -EAGAIN;
 		inode_lock(inode);
 	}
+
 	ret = ext4_write_checks(iocb, from);
 	if (ret <= 0)
-		goto out;
-	ret = file_remove_privs(iocb->ki_filp);
-	if (ret)
-		goto out;
-	ret = file_update_time(iocb->ki_filp);
-	if (ret)
 		goto out;
 
 	offset = iocb->ki_pos;
@@ -358,73 +498,16 @@ static ssize_t
 ext4_file_write_iter(struct kiocb *iocb, struct iov_iter *from)
 {
 	struct inode *inode = file_inode(iocb->ki_filp);
-	int o_direct = iocb->ki_flags & IOCB_DIRECT;
-	int unaligned_aio = 0;
-	int overwrite = 0;
-	ssize_t ret;
 
 	if (unlikely(ext4_forced_shutdown(EXT4_SB(inode->i_sb))))
 		return -EIO;
 
-#ifdef CONFIG_FS_DAX
 	if (IS_DAX(inode))
 		return ext4_dax_write_iter(iocb, from);
-#endif
-	if (!o_direct && (iocb->ki_flags & IOCB_NOWAIT))
-		return -EOPNOTSUPP;
 
-	if (!inode_trylock(inode)) {
-		if (iocb->ki_flags & IOCB_NOWAIT)
-			return -EAGAIN;
-		inode_lock(inode);
-	}
-
-	ret = ext4_write_checks(iocb, from);
-	if (ret <= 0)
-		goto out;
-
-	/*
-	 * Unaligned direct AIO must be serialized among each other as zeroing
-	 * of partial blocks of two competing unaligned AIOs can result in data
-	 * corruption.
-	 */
-	if (o_direct && ext4_test_inode_flag(inode, EXT4_INODE_EXTENTS) &&
-	    !is_sync_kiocb(iocb) &&
-	    ext4_unaligned_aio(inode, from, iocb->ki_pos)) {
-		unaligned_aio = 1;
-		ext4_unwritten_wait(inode);
-	}
-
-	iocb->private = &overwrite;
-	/* Check whether we do a DIO overwrite or not */
-	if (o_direct && !unaligned_aio) {
-		if (ext4_overwrite_io(inode, iocb->ki_pos, iov_iter_count(from))) {
-			if (ext4_should_dioread_nolock(inode))
-				overwrite = 1;
-		} else if (iocb->ki_flags & IOCB_NOWAIT) {
-			ret = -EAGAIN;
-			goto out;
-		}
-	}
-
-	ret = __generic_file_write_iter(iocb, from);
-	/*
-	 * Unaligned direct AIO must be the only IO in flight. Otherwise
-	 * overlapping aligned IO after unaligned might result in data
-	 * corruption.
-	 */
-	if (ret == -EIOCBQUEUED && unaligned_aio)
-		ext4_unwritten_wait(inode);
-	inode_unlock(inode);
-
-	if (ret > 0)
-		ret = generic_write_sync(iocb, ret);
-
-	return ret;
-
-out:
-	inode_unlock(inode);
-	return ret;
+	if (iocb->ki_flags & IOCB_DIRECT)
+		return ext4_dio_write_iter(iocb, from);
+	return ext4_buffered_write_iter(iocb, from);
 }
 
 #ifdef CONFIG_FS_DAX
