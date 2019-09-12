@@ -33,6 +33,7 @@
 #include "ext4_jbd2.h"
 #include "xattr.h"
 #include "acl.h"
+#include "truncate.h"
 
 static bool ext4_dio_checks(struct inode *inode)
 {
@@ -233,12 +234,90 @@ static ssize_t ext4_write_checks(struct kiocb *iocb, struct iov_iter *from)
 	return iov_iter_count(from);
 }
 
+static int ext4_handle_inode_extension(struct inode *inode, loff_t offset,
+				       ssize_t len, size_t count)
+{
+	handle_t *handle;
+	bool truncate = false;
+	ext4_lblk_t written_blk, end_blk;
+	int ret = 0, blkbits = inode->i_blkbits;
+
+	handle = ext4_journal_start(inode, EXT4_HT_INODE, 2);
+	if (IS_ERR(handle)) {
+		ret = PTR_ERR(handle);
+		goto orphan_del;
+	}
+
+	if (ext4_update_inode_size(inode, offset + len))
+		ext4_mark_inode_dirty(handle, inode);
+
+	/*
+	 * We may need truncate allocated but not written blocks
+	 * beyond EOF.
+	 */
+	written_blk = ALIGN(offset + len, 1 << blkbits);
+	end_blk = ALIGN(offset + count, 1 << blkbits);
+	if (written_blk < end_blk && ext4_can_truncate(inode))
+		truncate = true;
+
+	/*
+	 * Remove the inode from the orphan list if it has been
+	 * extended and everything went OK.
+	 */
+	if (!truncate && inode->i_nlink)
+		ext4_orphan_del(handle, inode);
+	ext4_journal_stop(handle);
+
+	if (truncate) {
+		ext4_truncate_failed_write(inode);
+orphan_del:
+		/*
+		 * If the truncate operation failed early the inode
+		 * may still be on the orphan list. In that case, we
+		 * need try remove the inode from the linked list in
+		 * memory.
+		 */
+		if (inode->i_nlink)
+			ext4_orphan_del(NULL, inode);
+	}
+	return ret;
+}
+
+/*
+ * The inode may have been placed onto the orphan list or has had
+ * blocks allocated beyond EOF as a result of an extension. We need to
+ * ensure that any necessary cleanup routines are performed if the
+ * error path has been taken for a write.
+ */
+static int ext4_handle_failed_inode_extension(struct inode *inode, loff_t size)
+{
+	handle_t *handle;
+
+	if (size > i_size_read(inode))
+		ext4_truncate_failed_write(inode);
+
+	if (!list_empty(&EXT4_I(inode)->i_orphan)) {
+		handle = ext4_journal_start(inode, EXT4_HT_INODE, 2);
+		if (IS_ERR(handle)) {
+			if (inode->i_nlink)
+				ext4_orphan_del(NULL, inode);
+			return PTR_ERR(handle);
+		}
+		if (inode->i_nlink)
+			ext4_orphan_del(handle, inode);
+		ext4_journal_stop(handle);
+	}
+	return 0;
+}
+
 #ifdef CONFIG_FS_DAX
 static ssize_t
 ext4_dax_write_iter(struct kiocb *iocb, struct iov_iter *from)
 {
-	struct inode *inode = file_inode(iocb->ki_filp);
 	ssize_t ret;
+	int error = 0;
+	loff_t offset;
+	struct inode *inode = file_inode(iocb->ki_filp);
 
 	if (!inode_trylock(inode)) {
 		if (iocb->ki_flags & IOCB_NOWAIT)
@@ -255,7 +334,18 @@ ext4_dax_write_iter(struct kiocb *iocb, struct iov_iter *from)
 	if (ret)
 		goto out;
 
+	offset = iocb->ki_pos;
 	ret = dax_iomap_rw(iocb, from, &ext4_iomap_ops);
+	if (ret > 0 && iocb->ki_pos > i_size_read(inode))
+		error = ext4_handle_inode_extension(inode, offset, ret,
+						    iov_iter_count(from));
+
+	if (ret < 0)
+		error = ext4_handle_failed_inode_extension(inode,
+							   iocb->ki_pos);
+
+	if (error)
+		ret = error;
 out:
 	inode_unlock(inode);
 	if (ret > 0)
