@@ -2945,6 +2945,39 @@ static inline int ext4_update_inode_size(struct inode *inode, loff_t newsize)
 	return changed;
 }
 
+#define EXT4_IOLOCK_EXCL	(1 << 0)
+#define EXT4_IOLOCK_SHARED	(1 << 1)
+
+static inline void ext4_ilock(struct inode *inode, unsigned int iolock)
+{
+	if (iolock == EXT4_IOLOCK_EXCL)
+		inode_lock(inode);
+	else
+		inode_lock_shared(inode);
+}
+
+static inline void ext4_iunlock(struct inode *inode, unsigned int iolock)
+{
+	if (iolock == EXT4_IOLOCK_EXCL)
+		inode_unlock(inode);
+	else
+		inode_unlock_shared(inode);
+}
+
+static inline int ext4_ilock_nowait(struct inode *inode, unsigned int iolock)
+{
+	if (iolock == EXT4_IOLOCK_EXCL)
+		return inode_trylock(inode);
+	else
+		return inode_trylock_shared(inode);
+}
+
+static inline void ext4_ilock_demote(struct inode *inode, unsigned int iolock)
+{
+	BUG_ON(iolock != EXT4_IOLOCK_EXCL);
+	downgrade_write(&inode->i_rwsem);
+}
+
 int ext4_update_disksize_before_punch(struct inode *inode, loff_t offset,
 				      loff_t len);
 
