@@ -166,18 +166,24 @@ static int ext4_release_file(struct inode *inode, struct file *filp)
  * threads are at work on the same unwritten block, they must be synchronized
  * or one thread will zero the other's data, causing corruption.
  */
-static int
-ext4_unaligned_aio(struct inode *inode, struct iov_iter *from, loff_t pos)
+static bool
+ext4_unaligned_io(struct inode *inode, struct iov_iter *from, loff_t pos)
 {
 	struct super_block *sb = inode->i_sb;
-	int blockmask = sb->s_blocksize - 1;
-
-	if (pos >= ALIGN(i_size_read(inode), sb->s_blocksize))
-		return 0;
+	unsigned long blockmask = sb->s_blocksize - 1;
 
 	if ((pos | iov_iter_alignment(from)) & blockmask)
 		return 1;
 
+	return 0;
+}
+
+static bool
+ext4_extending_io(struct inode *inode, loff_t offset, size_t len)
+{
+	if (offset + len > i_size_read(inode) ||
+	    offset + len > EXT4_I(inode)->i_disksize)
+		return 1;
 	return 0;
 }
 
@@ -204,7 +210,9 @@ static bool ext4_overwrite_io(struct inode *inode, loff_t pos, loff_t len)
 	return err == blklen && (map.m_flags & EXT4_MAP_MAPPED);
 }
 
-static ssize_t ext4_write_checks(struct kiocb *iocb, struct iov_iter *from)
+
+static ssize_t ext4_generic_write_checks(struct kiocb *iocb,
+					 struct iov_iter *from)
 {
 	struct inode *inode = file_inode(iocb->ki_filp);
 	ssize_t ret;
@@ -215,10 +223,6 @@ static ssize_t ext4_write_checks(struct kiocb *iocb, struct iov_iter *from)
 	ret = generic_write_checks(iocb, from);
 	if (ret <= 0)
 		return ret;
-
-	ret = file_modified(iocb->ki_filp);
-	if (ret)
-		return 0;
 
 	/*
 	 * If we have encountered a bitmap-format file, the size limit
@@ -231,7 +235,24 @@ static ssize_t ext4_write_checks(struct kiocb *iocb, struct iov_iter *from)
 			return -EFBIG;
 		iov_iter_truncate(from, sbi->s_bitmap_maxbytes - iocb->ki_pos);
 	}
+
 	return iov_iter_count(from);
+}
+
+static ssize_t ext4_write_checks(struct kiocb *iocb, struct iov_iter *from)
+{
+	ssize_t ret;
+	ssize_t count;
+
+	count = ext4_generic_write_checks(iocb, from);
+	if (count <= 0)
+		return count;
+
+	ret = file_modified(iocb->ki_filp);
+	if (ret)
+		return ret;
+
+	return count;
 }
 
 static ssize_t ext4_buffered_write_iter(struct kiocb *iocb,
@@ -337,6 +358,83 @@ static int ext4_handle_failed_inode_extension(struct inode *inode, loff_t size)
 }
 
 /*
+ * The intention here is to start with shared lock acquired
+ * (except in unaligned IO & extending writes case),
+ * then see if any condition requires an exclusive inode
+ * lock. If yes, then we restart the whole operation by
+ * releasing the shared lock and acquiring exclusive lock.
+ *
+ * - For unaligned_io we never take exclusive lock as it
+ *   may cause data corruption when two unaligned IO tries
+ *   to modify the same block.
+ *
+ * - For extending wirtes case we don't take
+ *   the exclusive lock, since it requires updating
+ *   inode i_disksize with exclusive lock.
+ *
+ * - shared locking will only be true mostly in case of
+ *   overwrites with dioread_nolock mode.
+ *   Otherwise we will switch to exclusive locking mode.
+ */
+static ssize_t ext4_dio_write_checks(struct kiocb *iocb, struct iov_iter *from,
+				 unsigned int *iolock, bool *unaligned_io,
+				 bool *extend)
+{
+	struct file *file = iocb->ki_filp;
+	struct inode *inode = file_inode(file);
+	loff_t offset = iocb->ki_pos;
+	loff_t final_size;
+	size_t count;
+	ssize_t ret;
+
+restart:
+	if (!ext4_dio_checks(inode)) {
+		ext4_iunlock(inode, *iolock);
+		return ext4_buffered_write_iter(iocb, from);
+	}
+
+	ret = ext4_generic_write_checks(iocb, from);
+	if (ret <= 0) {
+		ext4_iunlock(inode, *iolock);
+		return ret;
+	}
+
+	/* Recalculate since offset & count may change above. */
+	offset = iocb->ki_pos;
+	count = iov_iter_count(from);
+	final_size = offset + count;
+
+	if (ext4_unaligned_io(inode, from, offset))
+		*unaligned_io = true;
+
+	if (ext4_extending_io(inode, offset, count))
+		*extend = true;
+	/*
+	 * Determine whether the IO operation will overwrite allocated
+	 * and initialized blocks. If so, check to see whether it is
+	 * possible to take the dioread_nolock path.
+	 *
+	 * We need exclusive i_rwsem for changing security info
+	 * in file_modified().
+	 */
+	if (*iolock == EXT4_IOLOCK_SHARED &&
+	    (!IS_NOSEC(inode) || *unaligned_io || *extend ||
+	     !ext4_should_dioread_nolock(inode) ||
+	     !ext4_overwrite_io(inode, offset, count))) {
+		ext4_iunlock(inode, *iolock);
+		*iolock = EXT4_IOLOCK_EXCL;
+		ext4_ilock(inode, *iolock);
+		goto restart;
+	}
+
+	ret = file_modified(file);
+	if (ret)
+		return ret;
+
+	return count;
+}
+
+/*
  * For a write that extends the inode size, ext4_dio_write_iter() will
  * wait for the write to complete. Consequently, operations performed
  * within this function are still covered by the inode_lock(). On
@@ -371,64 +469,71 @@ static int ext4_dio_write_end_io(struct kiocb *iocb, ssize_t size, int error,
 
 static ssize_t ext4_dio_write_iter(struct kiocb *iocb, struct iov_iter *from)
 {
+
 	ssize_t ret;
-	size_t count;
 	loff_t offset = iocb->ki_pos;
+	size_t count = iov_iter_count(from);
 	struct inode *inode = file_inode(iocb->ki_filp);
-	bool extend = false, overwrite = false, unaligned_aio = false;
-	unsigned int iolock = EXT4_IOLOCK_EXCL;
+	bool extend = false, unaligned_io = false;
+	unsigned int iolock = EXT4_IOLOCK_SHARED;
+
+	/*
+	 * We initially start with shared inode lock
+	 * unless it is unaligned IO which needs
+	 * exclusive lock anyways.
+	 */
+	if (ext4_unaligned_io(inode, from, offset)) {
+		unaligned_io = true;
+		iolock = EXT4_IOLOCK_EXCL;
+	}
+	/*
+	 * Extending writes need exclusive lock
+	 * to update
+	 */
+	if (ext4_extending_io(inode, offset, count)) {
+		extend = true;
+		iolock = EXT4_IOLOCK_EXCL;
+	}
+
+	if (iolock == EXT4_IOLOCK_SHARED && !ext4_should_dioread_nolock(inode))
+		iolock = EXT4_IOLOCK_EXCL;
 
 	if (iocb->ki_flags & IOCB_NOWAIT) {
+		/*
+		 * unaligned IO may anyway require wait
+		 * at other places, so bail out.
+		 */
+		if (unaligned_io)
+			return -EAGAIN;
 		if (!ext4_ilock_nowait(inode, iolock))
 			return -EAGAIN;
 	} else {
 		ext4_ilock(inode, iolock);
 	}
 
-	if (!ext4_dio_checks(inode)) {
-		ext4_iunlock(inode, iolock);
-		/*
-		 * Fallback to buffered IO if the operation on the
-		 * inode is not supported by direct IO.
-		 */
-		return ext4_buffered_write_iter(iocb, from);
-	}
-
-	ret = ext4_write_checks(iocb, from);
-	if (ret <= 0) {
-		ext4_iunlock(inode, iolock);
+	ret = ext4_dio_write_checks(iocb, from, &iolock, &unaligned_io,
+				    &extend);
+	if (ret <= 0)
 		return ret;
-	}
-
 	/*
-	 * Unaligned direct AIO must be serialized among each other as
+	 * Unaligned direct IO must be serialized among each other as
 	 * the zeroing of partial blocks of two competing unaligned
-	 * AIOs can result in data corruption.
+	 * IOs can result in data corruption. This can mainly
+	 * happen since we may start with shared locking and for
+	 * dioread_nolock and overwrite case we may continue to be
+	 * in shared locking mode. In that case two parallel unaligned
+	 * IO may cause data corruption.
+	 *
+	 * So we make sure we don't allow any unaligned IO in flight.
+	 * For IOs where we need not wait (like unaligned non-AIO DIO),
+	 * below dio_wait may anyway become a no-op,
+	 * since we start take exclusive locks.
 	 */
-	if (ext4_test_inode_flag(inode, EXT4_INODE_EXTENTS) &&
-	    !is_sync_kiocb(iocb) && ext4_unaligned_aio(inode, from, offset)) {
-		unaligned_aio = true;
+	if (unaligned_io)
 		inode_dio_wait(inode);
-	}
 
-	/*
-	 * Determine whether the IO operation will overwrite allocated
-	 * and initialized blocks. If so, check to see whether it is
-	 * possible to take the dioread_nolock path.
-	 */
-	count = iov_iter_count(from);
-	if (!unaligned_aio && ext4_overwrite_io(inode, offset, count) &&
-	    ext4_should_dioread_nolock(inode)) {
-		overwrite = true;
-		ext4_ilock_demote(inode, iolock);
-		iolock = EXT4_IOLOCK_SHARED;
-	}
-
-	if (offset + count > i_size_read(inode) ||
-	    offset + count > EXT4_I(inode)->i_disksize) {
+	if (extend)
 		ext4_update_i_disksize(inode, inode->i_size);
-		extend = true;
-	}
 
 	ret = iomap_dio_rw(iocb, from, &ext4_iomap_ops, ext4_dio_write_end_io);
 
@@ -440,7 +545,7 @@ static ssize_t ext4_dio_write_iter(struct kiocb *iocb, struct iov_iter *from)
 	 * routines in ext4_dio_write_end_io() are covered by the
 	 * inode_lock().
 	 */
-	if (ret == -EIOCBQUEUED && (unaligned_aio || extend))
+	if (ret == -EIOCBQUEUED && (unaligned_io || extend))
 		inode_dio_wait(inode);
 
 	ext4_iunlock(inode, iolock);
