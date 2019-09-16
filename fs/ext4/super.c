@@ -2681,12 +2681,12 @@ static void ext4_orphan_cleanup(struct super_block *sb,
 					__func__, inode->i_ino, inode->i_size);
 			jbd_debug(2, "truncating inode %lu to %lld bytes\n",
 				  inode->i_ino, inode->i_size);
-			inode_lock(inode);
+			ext4_ilock(inode, EXT4_IOLOCK_EXCL);
 			truncate_inode_pages(inode->i_mapping, inode->i_size);
 			ret = ext4_truncate(inode);
 			if (ret)
 				ext4_std_error(inode->i_sb, ret);
-			inode_unlock(inode);
+			ext4_iunlock(inode, EXT4_IOLOCK_EXCL);
 			nr_truncates++;
 		} else {
 			if (test_opt(sb, DEBUG))
@@ -5763,7 +5763,7 @@ static int ext4_quota_on(struct super_block *sb, int type, int format_id,
 		 * files. If this fails, we return success anyway since quotas
 		 * are already enabled and this is not a hard failure.
 		 */
-		inode_lock(inode);
+		ext4_ilock(inode, EXT4_IOLOCK_EXCL);
 		handle = ext4_journal_start(inode, EXT4_HT_QUOTA, 1);
 		if (IS_ERR(handle))
 			goto unlock_inode;
@@ -5773,7 +5773,7 @@ static int ext4_quota_on(struct super_block *sb, int type, int format_id,
 		ext4_mark_inode_dirty(handle, inode);
 		ext4_journal_stop(handle);
 	unlock_inode:
-		inode_unlock(inode);
+		ext4_iunlock(inode, EXT4_IOLOCK_EXCL);
 	}
 	return err;
 }
@@ -5865,7 +5865,7 @@ static int ext4_quota_off(struct super_block *sb, int type)
 	if (err || ext4_has_feature_quota(sb))
 		goto out_put;
 
-	inode_lock(inode);
+	ext4_ilock(inode, EXT4_IOLOCK_EXCL);
 	/*
 	 * Update modification times of quota files when userspace can
 	 * start looking at them. If we fail, we return success anyway since
@@ -5880,7 +5880,7 @@ static int ext4_quota_off(struct super_block *sb, int type)
 	ext4_mark_inode_dirty(handle, inode);
 	ext4_journal_stop(handle);
 out_unlock:
-	inode_unlock(inode);
+	ext4_iunlock(inode, EXT4_IOLOCK_EXCL);
 out_put:
 	lockdep_set_quota_inode(inode, I_DATA_SEM_NORMAL);
 	iput(inode);

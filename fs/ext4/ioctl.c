@@ -787,13 +787,13 @@ long ext4_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 		if (err)
 			return err;
 
-		inode_lock(inode);
+		ext4_ilock(inode, EXT4_IOLOCK_EXCL);
 		err = ext4_ioctl_check_immutable(inode,
 				from_kprojid(&init_user_ns, ei->i_projid),
 				flags);
 		if (!err)
 			err = ext4_ioctl_setflags(inode, flags);
-		inode_unlock(inode);
+		ext4_iunlock(inode, EXT4_IOLOCK_EXCL);
 		mnt_drop_write_file(filp);
 		return err;
 	}
@@ -824,7 +824,7 @@ long ext4_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 			goto setversion_out;
 		}
 
-		inode_lock(inode);
+		ext4_ilock(inode, EXT4_IOLOCK_EXCL);
 		handle = ext4_journal_start(inode, EXT4_HT_INODE, 1);
 		if (IS_ERR(handle)) {
 			err = PTR_ERR(handle);
@@ -839,7 +839,7 @@ long ext4_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 		ext4_journal_stop(handle);
 
 unlock_out:
-		inode_unlock(inode);
+		ext4_iunlock(inode, EXT4_IOLOCK_EXCL);
 setversion_out:
 		mnt_drop_write_file(filp);
 		return err;
@@ -958,9 +958,9 @@ mext_out:
 		 * ext4_ext_swap_inode_data before we switch the
 		 * inode format to prevent read.
 		 */
-		inode_lock((inode));
+		ext4_ilock(inode, EXT4_IOLOCK_EXCL);
 		err = ext4_ext_migrate(inode);
-		inode_unlock((inode));
+		ext4_iunlock(inode, EXT4_IOLOCK_EXCL);
 		mnt_drop_write_file(filp);
 		return err;
 	}
@@ -1150,7 +1150,7 @@ resizefs_out:
 		if (err)
 			return err;
 
-		inode_lock(inode);
+		ext4_ilock(inode, EXT4_IOLOCK_EXCL);
 		ext4_fill_fsxattr(inode, &old_fa);
 		err = vfs_ioc_fssetxattr_check(inode, &old_fa, &fa);
 		if (err)
@@ -1165,7 +1165,7 @@ resizefs_out:
 			goto out;
 		err = ext4_ioctl_setproject(filp, fa.fsx_projid);
 out:
-		inode_unlock(inode);
+		ext4_iunlock(inode, EXT4_IOLOCK_EXCL);
 		mnt_drop_write_file(filp);
 		return err;
 	}
