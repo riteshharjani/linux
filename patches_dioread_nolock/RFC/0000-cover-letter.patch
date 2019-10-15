@@ -1,0 +1,59 @@
+From f22e3c66f5d1299b6c33a1b485e94cec85de52aa Mon Sep 17 00:00:00 2001
+From: Ritesh Harjani <riteshh@linux.ibm.com>
+Date: Tue, 15 Oct 2019 14:54:13 +0530
+Subject: [RFC 0/5] Ext4: Add support for blocksize < pagesize for dioread_nolock
+
+This patch series adds the support for blocksize < pagesize for
+dioread_nolock feature.
+
+Since in case of blocksize < pagesize, we can have multiple
+small buffers of page as unwritten extents, we need to
+maintain a vector of these unwritten extents which needs
+the conversion after the IO is complete. Thus, we maintain
+a list of tuple <offset, size> pair (io_end_vec) for this &
+traverse this list to do the unwritten to written conversion.
+
+I haven't rebased this series on top of DIO iomap patches,
+since while writing this changeset, iomap series still
+needed a revision.
+Appreciate if FS developers can take a look at it and give some
+initial feedback/comments.
+
+Tests completed
+===============
+
+All "quick" group xfstests seems to be passing.
+Tested xfstests with below configurations.
+	dioread_nolock with blocksize < pagesize
+	dioread_nolock with blocksize == pagesize
+	without dioread_nolock with blocksize < pagesize
+	without dioread_nolock with blocksize == pagesize
+ltp/fsx test with multiple iterations of 1 million ops
+did not show any error.
+
+
+About patches
+=============
+
+Patch 1 - 3: These are some cleanup and refactoring patches.
+Patch 4: This patch adds the required support.
+Patch 5: This patch removes the checks which was not allowing to mount
+with dioread_nolock when blocksize != pagesize was true.
+
+Ritesh Harjani (5):
+  ext4: keep uniform naming convention for io & io_end variables
+  ext4: Add API to bring in support for unwritten io_end_vec conversion
+  ext4: Refactor mpage_map_and_submit_buffers function
+  ext4: Add support for blocksize < pagesize in dioread_nolock
+  ext4: Enable blocksize < pagesize for dioread_nolock
+
+ fs/ext4/ext4.h    |  13 ++++-
+ fs/ext4/extents.c |  49 ++++++++++++-----
+ fs/ext4/inode.c   | 136 ++++++++++++++++++++++++++++++----------------
+ fs/ext4/page-io.c | 110 ++++++++++++++++++++++++-------------
+ fs/ext4/super.c   |  10 ----
+ 5 files changed, 208 insertions(+), 110 deletions(-)
+
+-- 
+2.21.0
+
