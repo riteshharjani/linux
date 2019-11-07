@@ -383,6 +383,17 @@ static const struct iomap_dio_ops ext4_dio_write_ops = {
 	.end_io = ext4_dio_write_end_io,
 };
 
+static bool ext4_dio_should_shared_lock(struct inode *inode)
+{
+	if (!S_ISREG(inode->i_mode))
+		return false;
+	if (!(ext4_test_inode_flag(inode, EXT4_INODE_EXTENTS)))
+		return false;
+	if (ext4_should_journal_data(inode))
+		return false;
+	return true;
+}
+
 /*
  * The intention here is to start with shared lock acquired then see if any
  * condition requires an exclusive inode lock. If yes, then we restart the
@@ -394,8 +405,8 @@ static const struct iomap_dio_ops ext4_dio_write_ops = {
  * - For extending writes case we don't take the shared lock, since it requires
  *   updating inode i_disksize and/or orphan handling with exclusive lock.
  *
- * - shared locking will only be true mostly in case of overwrites with
- *   dioread_nolock mode. Otherwise we will switch to excl. iolock mode.
+ * - shared locking will only be true mostly in case of overwrites.
+ *   Otherwise we will switch to excl. iolock mode.
  */
 static ssize_t ext4_dio_write_checks(struct kiocb *iocb, struct iov_iter *from,
 				 unsigned int *iolock, bool *unaligned_io,
@@ -433,15 +444,14 @@ restart:
 		*extend = true;
 	/*
 	 * Determine whether the IO operation will overwrite allocated
-	 * and initialized blocks. If so, check to see whether it is
-	 * possible to take the dioread_nolock path.
+	 * and initialized blocks.
 	 *
 	 * We need exclusive i_rwsem for changing security info
 	 * in file_modified().
 	 */
 	if (*iolock == EXT4_IOLOCK_SHARED &&
 	    (!IS_NOSEC(inode) || *unaligned_io || *extend ||
-	     !ext4_should_dioread_nolock(inode) ||
+	     !ext4_dio_should_shared_lock(inode) ||
 	     !ext4_overwrite_io(inode, offset, count))) {
 		ext4_iunlock(inode, *iolock);
 		*iolock = EXT4_IOLOCK_EXCL;
@@ -485,7 +495,10 @@ static ssize_t ext4_dio_write_iter(struct kiocb *iocb, struct iov_iter *from)
 		iolock = EXT4_IOLOCK_EXCL;
 	}
 
-	if (iolock == EXT4_IOLOCK_SHARED && !ext4_should_dioread_nolock(inode))
+	/*
+	 * Check if we should continue with shared iolock
+	 */
+	if (iolock == EXT4_IOLOCK_SHARED && !ext4_dio_should_shared_lock(inode))
 		iolock = EXT4_IOLOCK_EXCL;
 
 	if (iocb->ki_flags & IOCB_NOWAIT) {
