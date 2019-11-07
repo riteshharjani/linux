@@ -3930,7 +3930,7 @@ int ext4_punch_hole(struct inode *inode, loff_t offset, loff_t length)
 			return ret;
 	}
 
-	inode_lock(inode);
+	ext4_ilock(inode, EXT4_IOLOCK_EXCL);
 
 	/* No need to punch hole beyond i_size */
 	if (offset >= inode->i_size)
@@ -4037,7 +4037,7 @@ out_stop:
 out_dio:
 	up_write(&EXT4_I(inode)->i_mmap_sem);
 out_mutex:
-	inode_unlock(inode);
+	ext4_iunlock(inode, EXT4_IOLOCK_EXCL);
 	return ret;
 }
 

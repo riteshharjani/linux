@@ -55,14 +55,14 @@ static ssize_t ext4_dio_read_iter(struct kiocb *iocb, struct iov_iter *to)
 	struct inode *inode = file_inode(iocb->ki_filp);
 
 	if (iocb->ki_flags & IOCB_NOWAIT) {
-		if (!inode_trylock_shared(inode))
+		if (!ext4_ilock_nowait(inode, EXT4_IOLOCK_SHARED))
 			return -EAGAIN;
 	} else {
-		inode_lock_shared(inode);
+		ext4_ilock(inode, EXT4_IOLOCK_SHARED);
 	}
 
 	if (!ext4_dio_supported(inode)) {
-		inode_unlock_shared(inode);
+		ext4_iunlock(inode, EXT4_IOLOCK_SHARED);
 		/*
 		 * Fallback to buffered I/O if the operation being performed on
 		 * the inode is not supported by direct I/O. The IOCB_DIRECT
@@ -76,7 +76,7 @@ static ssize_t ext4_dio_read_iter(struct kiocb *iocb, struct iov_iter *to)
 
 	ret = iomap_dio_rw(iocb, to, &ext4_iomap_ops, NULL,
 			   is_sync_kiocb(iocb));
-	inode_unlock_shared(inode);
+	ext4_iunlock(inode, EXT4_IOLOCK_SHARED);
 
 	file_accessed(iocb->ki_filp);
 	return ret;
@@ -89,22 +89,23 @@ static ssize_t ext4_dax_read_iter(struct kiocb *iocb, struct iov_iter *to)
 	ssize_t ret;
 
 	if (iocb->ki_flags & IOCB_NOWAIT) {
-		if (!inode_trylock_shared(inode))
+		if (!ext4_ilock_nowait(inode, EXT4_IOLOCK_SHARED))
 			return -EAGAIN;
 	} else {
-		inode_lock_shared(inode);
+		ext4_ilock(inode, EXT4_IOLOCK_SHARED);
 	}
+
 	/*
 	 * Recheck under inode lock - at this point we are sure it cannot
 	 * change anymore
 	 */
 	if (!IS_DAX(inode)) {
-		inode_unlock_shared(inode);
+		ext4_iunlock(inode, EXT4_IOLOCK_SHARED);
 		/* Fallback to buffered IO in case we cannot support DAX */
 		return generic_file_read_iter(iocb, to);
 	}
 	ret = dax_iomap_rw(iocb, to, &ext4_iomap_ops);
-	inode_unlock_shared(inode);
+	ext4_iunlock(inode, EXT4_IOLOCK_SHARED);
 
 	file_accessed(iocb->ki_filp);
 	return ret;
@@ -244,7 +245,7 @@ static ssize_t ext4_buffered_write_iter(struct kiocb *iocb,
 	if (iocb->ki_flags & IOCB_NOWAIT)
 		return -EOPNOTSUPP;
 
-	inode_lock(inode);
+	ext4_ilock(inode, EXT4_IOLOCK_EXCL);
 	ret = ext4_write_checks(iocb, from);
 	if (ret <= 0)
 		goto out;
@@ -254,7 +255,7 @@ static ssize_t ext4_buffered_write_iter(struct kiocb *iocb,
 	current->backing_dev_info = NULL;
 
 out:
-	inode_unlock(inode);
+	ext4_iunlock(inode, EXT4_IOLOCK_EXCL);
 	if (likely(ret > 0)) {
 		iocb->ki_pos += ret;
 		ret = generic_write_sync(iocb, ret);
@@ -372,16 +373,17 @@ static ssize_t ext4_dio_write_iter(struct kiocb *iocb, struct iov_iter *from)
 	handle_t *handle;
 	struct inode *inode = file_inode(iocb->ki_filp);
 	bool extend = false, overwrite = false, unaligned_aio = false;
+	unsigned int iolock = EXT4_IOLOCK_EXCL;
 
 	if (iocb->ki_flags & IOCB_NOWAIT) {
-		if (!inode_trylock(inode))
+		if (!ext4_ilock_nowait(inode, iolock))
 			return -EAGAIN;
 	} else {
-		inode_lock(inode);
+		ext4_ilock(inode, iolock);
 	}
 
 	if (!ext4_dio_supported(inode)) {
-		inode_unlock(inode);
+		ext4_iunlock(inode, iolock);
 		/*
 		 * Fallback to buffered I/O if the inode does not support
 		 * direct I/O.
@@ -391,7 +393,7 @@ static ssize_t ext4_dio_write_iter(struct kiocb *iocb, struct iov_iter *from)
 
 	ret = ext4_write_checks(iocb, from);
 	if (ret <= 0) {
-		inode_unlock(inode);
+		ext4_iunlock(inode, iolock);
 		return ret;
 	}
 
@@ -416,7 +418,8 @@ static ssize_t ext4_dio_write_iter(struct kiocb *iocb, struct iov_iter *from)
 	if (!unaligned_aio && ext4_overwrite_io(inode, offset, count) &&
 	    ext4_should_dioread_nolock(inode)) {
 		overwrite = true;
-		downgrade_write(&inode->i_rwsem);
+		ext4_ilock_demote(inode, iolock);
+		iolock = EXT4_IOLOCK_SHARED;
 	}
 
 	if (offset + count > EXT4_I(inode)->i_disksize) {
@@ -443,10 +446,7 @@ static ssize_t ext4_dio_write_iter(struct kiocb *iocb, struct iov_iter *from)
 		ret = ext4_handle_inode_extension(inode, offset, ret, count);
 
 out:
-	if (overwrite)
-		inode_unlock_shared(inode);
-	else
-		inode_unlock(inode);
+	ext4_iunlock(inode, iolock);
 
 	if (ret >= 0 && iov_iter_count(from)) {
 		ssize_t err;
@@ -489,10 +489,10 @@ ext4_dax_write_iter(struct kiocb *iocb, struct iov_iter *from)
 	struct inode *inode = file_inode(iocb->ki_filp);
 
 	if (iocb->ki_flags & IOCB_NOWAIT) {
-		if (!inode_trylock(inode))
+		if (!ext4_ilock_nowait(inode, EXT4_IOLOCK_EXCL))
 			return -EAGAIN;
 	} else {
-		inode_lock(inode);
+		ext4_ilock(inode, EXT4_IOLOCK_EXCL);
 	}
 
 	ret = ext4_write_checks(iocb, from);
@@ -524,7 +524,7 @@ ext4_dax_write_iter(struct kiocb *iocb, struct iov_iter *from)
 	if (extend)
 		ret = ext4_handle_inode_extension(inode, offset, ret, count);
 out:
-	inode_unlock(inode);
+	ext4_iunlock(inode, EXT4_IOLOCK_EXCL);
 	if (ret > 0)
 		ret = generic_write_sync(iocb, ret);
 	return ret;
@@ -757,16 +757,16 @@ loff_t ext4_llseek(struct file *file, loff_t offset, int whence)
 		return generic_file_llseek_size(file, offset, whence,
 						maxbytes, i_size_read(inode));
 	case SEEK_HOLE:
-		inode_lock_shared(inode);
+		ext4_ilock(inode, EXT4_IOLOCK_SHARED);
 		offset = iomap_seek_hole(inode, offset,
 					 &ext4_iomap_report_ops);
-		inode_unlock_shared(inode);
+		ext4_iunlock(inode, EXT4_IOLOCK_SHARED);
 		break;
 	case SEEK_DATA:
-		inode_lock_shared(inode);
+		ext4_ilock(inode, EXT4_IOLOCK_SHARED);
 		offset = iomap_seek_data(inode, offset,
 					 &ext4_iomap_report_ops);
-		inode_unlock_shared(inode);
+		ext4_iunlock(inode, EXT4_IOLOCK_SHARED);
 		break;
 	}
 

@@ -422,9 +422,9 @@ static int ext4_xattr_inode_iget(struct inode *parent, unsigned long ea_ino,
 		ext4_set_inode_state(inode, EXT4_STATE_LUSTRE_EA_INODE);
 		ext4_xattr_inode_set_ref(inode, 1);
 	} else {
-		inode_lock(inode);
+		ext4_ilock(inode, EXT4_IOLOCK_EXCL);
 		inode->i_flags |= S_NOQUOTA;
-		inode_unlock(inode);
+		ext4_iunlock(inode, EXT4_IOLOCK_EXCL);
 	}
 
 	*ea_inode = inode;
@@ -976,7 +976,7 @@ static int ext4_xattr_inode_update_ref(handle_t *handle, struct inode *ea_inode,
 	u32 hash;
 	int ret;
 
-	inode_lock(ea_inode);
+	ext4_ilock(ea_inode, EXT4_IOLOCK_EXCL);
 
 	ret = ext4_reserve_inode_write(handle, ea_inode, &iloc);
 	if (ret)
@@ -1030,7 +1030,7 @@ static int ext4_xattr_inode_update_ref(handle_t *handle, struct inode *ea_inode,
 		ext4_warning_inode(ea_inode,
 				   "ext4_mark_iloc_dirty() failed ret=%d", ret);
 out:
-	inode_unlock(ea_inode);
+	ext4_iunlock(ea_inode, EXT4_IOLOCK_EXCL);
 	return ret;
 }
 
@@ -1380,10 +1380,11 @@ retry:
 		block += 1;
 	}
 
-	inode_lock(ea_inode);
+	ext4_ilock(ea_inode, EXT4_IOLOCK_EXCL);
 	i_size_write(ea_inode, wsize);
 	ext4_update_i_disksize(ea_inode, wsize);
-	inode_unlock(ea_inode);
+	ext4_iunlock(ea_inode, EXT4_IOLOCK_EXCL);
+
 
 	ext4_mark_inode_dirty(handle, ea_inode);
 
@@ -1432,9 +1433,9 @@ static struct inode *ext4_xattr_inode_create(handle_t *handle,
 		 */
 		dquot_free_inode(ea_inode);
 		dquot_drop(ea_inode);
-		inode_lock(ea_inode);
+		ext4_ilock(ea_inode, EXT4_IOLOCK_EXCL);
 		ea_inode->i_flags |= S_NOQUOTA;
-		inode_unlock(ea_inode);
+		ext4_iunlock(ea_inode, EXT4_IOLOCK_EXCL);
 	}
 
 	return ea_inode;

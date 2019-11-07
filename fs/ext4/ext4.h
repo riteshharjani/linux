@@ -2960,6 +2960,39 @@ do {								\
 #define EXT4_FREECLUSTERS_WATERMARK 0
 #endif
 
+#define EXT4_IOLOCK_EXCL	(1 << 0)
+#define EXT4_IOLOCK_SHARED	(1 << 1)
+
+static inline void ext4_ilock(struct inode *inode, unsigned int iolock)
+{
+	if (iolock == EXT4_IOLOCK_EXCL)
+		inode_lock(inode);
+	else
+		inode_lock_shared(inode);
+}
+
+static inline void ext4_iunlock(struct inode *inode, unsigned int iolock)
+{
+	if (iolock == EXT4_IOLOCK_EXCL)
+		inode_unlock(inode);
+	else
+		inode_unlock_shared(inode);
+}
+
+static inline int ext4_ilock_nowait(struct inode *inode, unsigned int iolock)
+{
+	if (iolock == EXT4_IOLOCK_EXCL)
+		return inode_trylock(inode);
+	else
+		return inode_trylock_shared(inode);
+}
+
+static inline void ext4_ilock_demote(struct inode *inode, unsigned int iolock)
+{
+	BUG_ON(iolock != EXT4_IOLOCK_EXCL);
+	downgrade_write(&inode->i_rwsem);
+}
+
 /* Update i_disksize. Requires i_mutex to avoid races with truncate */
 static inline void ext4_update_i_disksize(struct inode *inode, loff_t newsize)
 {
