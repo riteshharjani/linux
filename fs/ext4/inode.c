@@ -2193,6 +2193,11 @@ static int mpage_process_page_bufs(struct mpage_da_data *mpd,
 	} while (lblk++, (bh = bh->b_this_page) != head);
 	/* So far everything mapped? Submit the page for IO. */
 	if (mpd->map.m_len == 0) {
+/*
+		if (lblk >= blocks) {
+			WARN(1, "lblks >= blocks\n");
+		}
+*/
 		err = mpage_submit_page(mpd, head->b_page);
 		if (err < 0)
 			return err;
@@ -2204,6 +2209,7 @@ static int mpage_process_page_bufs(struct mpage_da_data *mpd,
 	return 1;
 }
 
+static int mpage_map_one_extent(handle_t *handle, struct mpage_da_data *mpd);
 /*
  * mpage_process_page - update page buffers corresponding to changed extent and
  *		       may submit fully mapped page for IO
@@ -2219,7 +2225,7 @@ static int mpage_process_page_bufs(struct mpage_da_data *mpd,
  * If the given page is not fully mapped, we update @map to the next extent in
  * the given page that needs mapping & return @map_bh as true.
  */
-static int mpage_process_page(struct mpage_da_data *mpd, struct page *page,
+static int mpage_process_page(handle_t *handle, struct mpage_da_data *mpd, struct page *page,
 			      ext4_lblk_t *m_lblk, ext4_fsblk_t *m_pblk,
 			      bool *map_bh)
 {
@@ -2234,8 +2240,9 @@ static int mpage_process_page(struct mpage_da_data *mpd, struct page *page,
 
 	bh = head = page_buffers(page);
 	do {
-		if (lblk < mpd->map.m_lblk)
+		if (lblk < mpd->map.m_lblk) {
 			continue;
+		}
 		if (lblk >= mpd->map.m_lblk + mpd->map.m_len) {
 			/*
 			 * Buffer after end of mapped extent.
@@ -2247,18 +2254,39 @@ static int mpage_process_page(struct mpage_da_data *mpd, struct page *page,
 			io_end_size = 0;
 
 			err = mpage_process_page_bufs(mpd, head, bh, lblk);
-			if (err > 0)
+			if (err < 0)
+				goto out;
+			if (err >=0)
 				err = 0;
-			if (!err && mpd->map.m_len && mpd->map.m_lblk > lblk) {
+			if (!mpd->map.m_len) {
+				// page submitted for IO.
+				//trace_ext4_ext_handle_unwritten_extents(inode, mpd->map, 0, mpd->map.m_len, mpd->map.m_len);
+				goto out;
+			} else if (mpd->map.m_len) {
 				io_end_vec = ext4_alloc_io_end_vec(io_end);
 				if (IS_ERR(io_end_vec)) {
 					err = PTR_ERR(io_end_vec);
 					goto out;
 				}
 				io_end_vec->offset = mpd->map.m_lblk << blkbits;
+				err = mpage_map_one_extent(handle, mpd);
+				if (err < 0)
+					goto out;
+				pblock = mpd->map.m_pblk;
+/*
+				if (buffer_delay(bh)) {
+					clear_buffer_delay(bh);
+					bh->b_blocknr = pblock++;
+				}
+				clear_buffer_unwritten(bh);
+				io_end_size += (1 << blkbits);
+*/
+			} else {
+				pr_err("err %d len %u %u %u\n", err,
+					mpd->map.m_len, mpd->map.m_lblk, lblk);
+				BUG();
 			}
-			*map_bh = true;
-			goto out;
+			//*map_bh = true;
 		}
 		if (buffer_delay(bh)) {
 			clear_buffer_delay(bh);
@@ -2291,7 +2319,7 @@ out:
  * mapped, we update @map to the next extent in the last page that needs
  * mapping. Otherwise we submit the page for IO.
  */
-static int mpage_map_and_submit_buffers(struct mpage_da_data *mpd)
+static int mpage_map_and_submit_buffers(handle_t *handle, struct mpage_da_data *mpd)
 {
 	struct pagevec pvec;
 	int nr_pages, i;
@@ -2317,14 +2345,14 @@ static int mpage_map_and_submit_buffers(struct mpage_da_data *mpd)
 		for (i = 0; i < nr_pages; i++) {
 			struct page *page = pvec.pages[i];
 
-			err = mpage_process_page(mpd, page, &lblk, &pblock,
+			err = mpage_process_page(handle, mpd, page, &lblk, &pblock,
 						 &map_bh);
 			/*
 			 * If map_bh is true, means page may require further bh
 			 * mapping, or maybe the page was submitted for IO.
 			 * So we return to call further extent mapping.
 			 */
-			if (err < 0 || map_bh)
+			if (err < 0 || !mpd->map.m_len)
 				goto out;
 			/* Page fully mapped - let IO run! */
 			err = mpage_submit_page(mpd, page);
@@ -2466,7 +2494,7 @@ static int mpage_map_and_submit_extent(handle_t *handle,
 		 * Update buffer state, submit mapped pages, and get us new
 		 * extent to map
 		 */
-		err = mpage_map_and_submit_buffers(mpd);
+		err = mpage_map_and_submit_buffers(handle, mpd);
 		if (err < 0)
 			goto update_disksize;
 	} while (map->m_len);
