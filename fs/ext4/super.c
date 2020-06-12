@@ -3876,7 +3876,7 @@ static int ext4_fill_super(struct super_block *sb, void *data, int silent)
 
 	blocksize = BLOCK_SIZE << le32_to_cpu(es->s_log_block_size);
 
-	if (blocksize == PAGE_SIZE)
+//	if (blocksize == PAGE_SIZE)
 		set_opt(sb, DIOREAD_NOLOCK);
 
 	if (blocksize < EXT4_MIN_BLOCK_SIZE ||
