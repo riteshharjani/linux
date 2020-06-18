@@ -2256,8 +2256,8 @@ static int mpage_process_page(handle_t *handle, struct mpage_da_data *mpd, struc
 			err = mpage_process_page_bufs(mpd, head, bh, lblk);
 			if (err < 0)
 				goto out;
-			if (err >=0)
-				err = 0;
+//			if (err >=0)
+//				err = 0;
 			if (!mpd->map.m_len) {
 				// page submitted for IO.
 				//trace_ext4_ext_handle_unwritten_extents(inode, mpd->map, 0, mpd->map.m_len, mpd->map.m_len);
@@ -2352,6 +2352,7 @@ static int mpage_map_and_submit_buffers(handle_t *handle, struct mpage_da_data *
 			 * mapping, or maybe the page was submitted for IO.
 			 * So we return to call further extent mapping.
 			 */
+			WARN_ON(err == 1 && !mpd->map.m_len);
 			if (err < 0 || !mpd->map.m_len)
 				goto out;
 			/* Page fully mapped - let IO run! */
@@ -2854,6 +2855,7 @@ retry:
 			continue;
 		}
 		/* Fatal error - ENOMEM, EIO... */
+		WARN_ON(ret == 1);
 		if (ret)
 			break;
 	}
