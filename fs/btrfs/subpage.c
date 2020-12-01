@@ -52,10 +52,12 @@ int btrfs_alloc_subpage(const struct btrfs_fs_info *fs_info,
 	if (!*ret)
 		return -ENOMEM;
 	spin_lock_init(&(*ret)->lock);
-	if (type == BTRFS_SUBPAGE_METADATA)
+	if (type == BTRFS_SUBPAGE_METADATA) {
 		atomic_set(&(*ret)->eb_refs, 0);
-	else
+	} else {
 		atomic_set(&(*ret)->readers, 0);
+		atomic_set(&(*ret)->writers, 0);
+	}
 	return 0;
 }
 
@@ -142,6 +144,62 @@ void btrfs_subpage_end_reader(const struct btrfs_fs_info *fs_info,
 	btrfs_subpage_assert(fs_info, page, start, len);
 	ASSERT(atomic_read(&subpage->readers) >= nbits);
 	if (atomic_sub_and_test(nbits, &subpage->readers))
+		unlock_page(page);
+}
+
+static void btrfs_subpage_clamp_range(struct page *page, u64 *start, u32 *len)
+{
+	u64 orig_start = *start;
+	u32 orig_len = *len;
+
+	*start = max_t(u64, page_offset(page), orig_start);
+	*len = min_t(u64, page_offset(page) + PAGE_SIZE,
+		     orig_start + orig_len) - *start;
+}
+
+void btrfs_subpage_start_writer(const struct btrfs_fs_info *fs_info,
+		struct page *page, u64 start, u32 len)
+{
+	struct btrfs_subpage *subpage = (struct btrfs_subpage *)page->private;
+	int nbits = len >> fs_info->sectorsize_bits;
+	int ret;
+
+	btrfs_subpage_assert(fs_info, page, start, len);
+
+	ASSERT(atomic_read(&subpage->readers) == 0);
+	ret = atomic_add_return(nbits, &subpage->writers);
+	ASSERT(ret == nbits);
+}
+
+bool btrfs_subpage_end_and_test_writer(const struct btrfs_fs_info *fs_info,
+		struct page *page, u64 start, u32 len)
+{
+	struct btrfs_subpage *subpage = (struct btrfs_subpage *)page->private;
+	int nbits = len >> fs_info->sectorsize_bits;
+
+	btrfs_subpage_assert(fs_info, page, start, len);
+
+	ASSERT(atomic_read(&subpage->writers) >= nbits);
+	return atomic_sub_and_test(nbits, &subpage->writers);
+}
+
+void btrfs_page_start_writer_lock(const struct btrfs_fs_info *fs_info,
+		struct page *page, u64 start, u32 len)
+{
+	if (unlikely(!fs_info) || fs_info->sectorsize == PAGE_SIZE)
+		return lock_page(page);
+	lock_page(page);
+	btrfs_subpage_clamp_range(page, &start, &len);
+	btrfs_subpage_start_writer(fs_info, page, start, len);
+}
+
+void btrfs_page_end_writer_lock(const struct btrfs_fs_info *fs_info,
+		struct page *page, u64 start, u32 len)
+{
+	if (unlikely(!fs_info) || fs_info->sectorsize == PAGE_SIZE)
+		return unlock_page(page);
+	btrfs_subpage_clamp_range(page, &start, &len);
+	if (btrfs_subpage_end_and_test_writer(fs_info, page, start, len))
 		unlock_page(page);
 }
 
@@ -285,16 +343,6 @@ void btrfs_subpage_clear_writeback(const struct btrfs_fs_info *fs_info,
 	if (subpage->writeback_bitmap == 0)
 		end_page_writeback(page);
 	spin_unlock_irqrestore(&subpage->lock, flags);
-}
-
-static void btrfs_subpage_clamp_range(struct page *page, u64 *start, u32 *len)
-{
-	u64 orig_start = *start;
-	u32 orig_len = *len;
-
-	*start = max_t(u64, page_offset(page), orig_start);
-	*len = min_t(u64, page_offset(page) + PAGE_SIZE,
-		     orig_start + orig_len) - *start;
 }
 
 /*
