@@ -3130,7 +3130,7 @@ int btrfs_bio_fits_in_stripe(struct page *page, size_t size, struct bio *bio,
 			     unsigned long bio_flags);
 bool btrfs_bio_fits_in_ordered_extent(struct page *page, struct bio *bio,
 				      unsigned int size);
-void btrfs_set_range_writeback(struct extent_io_tree *tree, u64 start, u64 end);
+void btrfs_set_range_writeback(struct btrfs_inode *inode, u64 start, u64 end);
 vm_fault_t btrfs_page_mkwrite(struct vm_fault *vmf);
 int btrfs_readpage(struct file *file, struct page *page);
 void btrfs_evict_inode(struct inode *inode);
