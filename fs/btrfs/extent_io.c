@@ -3224,6 +3224,8 @@ static int submit_extent_page(unsigned int opf,
 
 	ASSERT(bio_ret);
 
+	ASSERT(pg_offset < PAGE_SIZE && size <= PAGE_SIZE &&
+	       pg_offset + size <= PAGE_SIZE);
 	if (*bio_ret) {
 		bio = *bio_ret;
 		if (force_bio_submit ||
