@@ -3079,21 +3079,43 @@ void btrfs_writepage_endio_finish_ordered(struct page *page, u64 start,
 	struct btrfs_fs_info *fs_info = inode->root->fs_info;
 	struct btrfs_ordered_extent *ordered_extent = NULL;
 	struct btrfs_workqueue *wq;
-
-	trace_btrfs_writepage_end_io_hook(page, start, end, uptodate);
-
-	ClearPagePrivate2(page);
-	if (!btrfs_dec_test_ordered_pending(inode, &ordered_extent, start,
-					    end - start + 1, uptodate))
-		return;
+	u64 cur = start;
 
 	if (btrfs_is_free_space_inode(inode))
 		wq = fs_info->endio_freespace_worker;
 	else
 		wq = fs_info->endio_write_workers;
 
-	btrfs_init_work(&ordered_extent->work, finish_ordered_fn, NULL, NULL);
-	btrfs_queue_work(wq, &ordered_extent->work);
+	trace_btrfs_writepage_end_io_hook(page, start, end, uptodate);
+
+	/*
+	 * Private2 is to incidate the range has ordered extent, and it's used
+	 * to determine who is to dec the ordered extent accounting, between
+	 * invalidatepage and endio.
+	 */
+	ClearPagePrivate2(page);
+	while (cur <= end) {
+		u64 last_offset = cur;
+
+		if (btrfs_dec_test_first_ordered_pending(inode,
+					&ordered_extent, &last_offset,
+					end + 1 - last_offset, uptodate)) {
+			btrfs_init_work(&ordered_extent->work,
+					finish_ordered_fn, NULL, NULL);
+			btrfs_queue_work(wq, &ordered_extent->work);
+		}
+		/*
+		 * No ordered extent found starts at or after cur, but there is
+		 * still a chance that after several sectors there is an ordered
+		 * extent. So here we just skip to next sector.
+		 */
+		if (last_offset == cur) {
+			cur += fs_info->sectorsize;
+			continue;
+		}
+		cur = last_offset;
+		ordered_extent = NULL;
+	}
 }
 
 /*
