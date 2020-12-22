@@ -8457,8 +8457,8 @@ static void btrfs_invalidatepage(struct page *page, unsigned int offset,
 	u64 cur;
 	int inode_evicting = inode->vfs_inode.i_state & I_FREEING;
 	bool cleared_private2;
-	bool found_ordered = false;
-	bool completed_ordered = false;
+	int nr_ordered = 0;
+	int nr_finished = 0;
 
 	/*
 	 * we have the page locked, so new writeback can't start,
@@ -8486,13 +8486,16 @@ static void btrfs_invalidatepage(struct page *page, unsigned int offset,
 		ordered = btrfs_lookup_ordered_range(inode, cur,
 				page_end - cur + 1);
 		if (ordered) {
+			bool finished;
 			cur = ordered->file_offset + ordered->num_bytes;
 
-			found_ordered = true;
-			completed_ordered = invalidate_ordered_extent(inode,
+			nr_ordered++;
+			finished = invalidate_ordered_extent(inode,
 					ordered, page, &cached_state,
 					cleared_private2,
 					inode_evicting);
+			if (finished)
+				nr_finished++;
 		} else {
 			/* Exhausted all ordered extents */
 			break;
@@ -8525,7 +8528,7 @@ static void btrfs_invalidatepage(struct page *page, unsigned int offset,
 		 * is cleared if we don't delete, otherwise it can lead to
 		 * corruptions if the i_size is extented later.
 		 */
-		if (found_ordered && !completed_ordered)
+		if (nr_ordered && nr_ordered != nr_finished)
 			delete = false;
 		clear_extent_bit(tree, page_start, page_end, EXTENT_LOCKED |
 				 EXTENT_DELALLOC | EXTENT_UPTODATE |
