@@ -166,7 +166,7 @@ static inline void btrfs_cleanup_ordered_extents(struct btrfs_inode *inode,
 		index++;
 		if (!page)
 			continue;
-		ClearPagePrivate2(page);
+		ClearPageOrdered(page);
 		put_page(page);
 	}
 
@@ -1165,15 +1165,16 @@ static noinline int cow_file_range(struct btrfs_inode *inode,
 
 		btrfs_dec_block_group_reservations(fs_info, ins.objectid);
 
-		/* we're not doing compressed IO, don't unlock the first
+		/*
+		 * we're not doing compressed IO, don't unlock the first
 		 * page (which the caller expects to stay locked), don't
 		 * clear any dirty bits and don't set any writeback bits
 		 *
-		 * Do set the Private2 bit so we know this page was properly
-		 * setup for writepage
+		 * Do set the Ordered (Private2) bit so we know this page was
+		 * properly setup for writepage
 		 */
 		page_ops = unlock ? PAGE_UNLOCK : 0;
-		page_ops |= PAGE_SET_PRIVATE2;
+		page_ops |= PAGE_SET_ORDERED;
 
 		extent_clear_unlock_delalloc(inode, start, start + ram_size - 1,
 					     locked_page,
@@ -1837,7 +1838,7 @@ out_check:
 					     locked_page, EXTENT_LOCKED |
 					     EXTENT_DELALLOC |
 					     EXTENT_CLEAR_DATA_RESV,
-					     PAGE_UNLOCK | PAGE_SET_PRIVATE2);
+					     PAGE_UNLOCK | PAGE_SET_ORDERED);
 
 		cur_offset = extent_end;
 
@@ -2616,7 +2617,7 @@ again:
 	lock_extent_bits(&inode->io_tree, page_start, page_end, &cached_state);
 
 	/* already ordered? We're done */
-	if (PagePrivate2(page))
+	if (PageOrdered(page))
 		goto out_reserved;
 
 	ordered = btrfs_lookup_ordered_range(inode, page_start, PAGE_SIZE);
@@ -2692,7 +2693,7 @@ int btrfs_writepage_cow_fixup(struct page *page, u64 start, u64 end)
 	struct btrfs_writepage_fixup *fixup;
 
 	/* this page is properly in the ordered list */
-	if (TestClearPagePrivate2(page))
+	if (TestClearPageOrdered(page))
 		return 0;
 
 	/*
@@ -3089,11 +3090,11 @@ void btrfs_writepage_endio_finish_ordered(struct page *page, u64 start,
 	trace_btrfs_writepage_end_io_hook(page, start, end, uptodate);
 
 	/*
-	 * Private2 is to incidate the range has ordered extent, and it's used
-	 * to determine who is to dec the ordered extent accounting, between
-	 * invalidatepage and endio.
+	 * Ordered (Private2) is to incidate the range has ordered extent, and
+	 * it's used to determine who is to dec the ordered extent accounting,
+	 * between invalidatepage and endio.
 	 */
-	ClearPagePrivate2(page);
+	ClearPageOrdered(page);
 	while (cur <= end) {
 		u64 last_offset = cur;
 
@@ -8375,9 +8376,9 @@ static int btrfs_migratepage(struct address_space *mapping,
 	if (page_has_private(page))
 		attach_page_private(newpage, detach_page_private(page));
 
-	if (PagePrivate2(page)) {
-		ClearPagePrivate2(page);
-		SetPagePrivate2(newpage);
+	if (PageOrdered(page)) {
+		ClearPageOrdered(page);
+		SetPageOrdered(newpage);
 	}
 
 	if (mode != MIGRATE_SYNC_NO_COPY)
@@ -8456,7 +8457,7 @@ static void btrfs_invalidatepage(struct page *page, unsigned int offset,
 	u64 page_end = page_start + PAGE_SIZE - 1;
 	u64 cur;
 	int inode_evicting = inode->vfs_inode.i_state & I_FREEING;
-	bool cleared_private2;
+	bool cleared_ordered;
 	int nr_ordered = 0;
 	int nr_finished = 0;
 
@@ -8465,7 +8466,7 @@ static void btrfs_invalidatepage(struct page *page, unsigned int offset,
 	 * and the dirty bit won't be cleared while we are here.
 	 *
 	 * Wait for IO on this page so that we can safely clear
-	 * the PagePrivate2 bit and do ordered accounting
+	 * the PageOrdered (Private2) bit and do ordered accounting.
 	 */
 	wait_on_page_writeback(page);
 
@@ -8489,7 +8490,7 @@ static void btrfs_invalidatepage(struct page *page, unsigned int offset,
 	if (!inode_evicting)
 		lock_extent_bits(tree, page_start, page_end, &cached_state);
 
-	cleared_private2 = TestClearPagePrivate2(page);
+	cleared_ordered = TestClearPageOrdered(page);
 	cur = page_start;
 	/* Iterate through all the ordered extents covering the page */
 	while (cur < page_end) {
@@ -8504,7 +8505,7 @@ static void btrfs_invalidatepage(struct page *page, unsigned int offset,
 			nr_ordered++;
 			finished = invalidate_ordered_extent(inode,
 					ordered, page, &cached_state,
-					cleared_private2,
+					cleared_ordered,
 					inode_evicting);
 			if (finished)
 				nr_finished++;

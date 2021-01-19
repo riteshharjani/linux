@@ -1822,8 +1822,8 @@ static int process_one_page(struct btrfs_fs_info *fs_info,
 	ASSERT(end + 1 - start != 0 && end + 1 - start < U32_MAX);
 	len = end + 1 - start;
 
-	if (page_ops & PAGE_SET_PRIVATE2)
-		SetPagePrivate2(page);
+	if (page_ops & PAGE_SET_ORDERED)
+		SetPageOrdered(page);
 	if (page_ops & PAGE_SET_ERROR)
 		btrfs_page_clamp_set_error(fs_info, page, start, len);
 	if (page_ops & PAGE_START_WRITEBACK) {
