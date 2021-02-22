@@ -384,14 +384,11 @@ static ssize_t supported_rw_sectorsize_show(struct kobject *kobj,
 					    struct kobj_attribute *a,
 					    char *buf)
 {
-	ssize_t ret = 0;
-
-	/* Only PAGE_SIZE as sectorsize is supported */
-	ret += scnprintf(buf + ret, PAGE_SIZE - ret, "%lu\n", PAGE_SIZE);
-	return ret;
+	return supported_ro_sectorsize_show(kobj, a, buf);
 }
 BTRFS_ATTR(static_feature, supported_rw_sectorsize,
 	   supported_rw_sectorsize_show);
+
 static struct attribute *btrfs_supported_static_feature_attrs[] = {
 	BTRFS_ATTR_PTR(static_feature, rmdir_subvol),
 	BTRFS_ATTR_PTR(static_feature, supported_checksums),
