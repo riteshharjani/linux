@@ -8401,17 +8401,17 @@ static bool invalidate_ordered_extent(struct btrfs_inode *inode,
 				      bool private2_cleared,
 				      bool inode_evicting)
 {
-	u64 start = page_offset(page);
-	u64 end = page_offset(page) + PAGE_SIZE - 1;
-	u32 len = PAGE_SIZE;
+	/*
+	 * Clamp the range inside the page.
+	 * As for subpage case, multiple ordered extents can exist inside the
+	 * page.
+	 */
+	u64 start = max_t(u64, page_offset(page), ordered->file_offset);
+	u64 end = min(page_offset(page) + PAGE_SIZE - 1,
+		      ordered->file_offset + ordered->num_bytes - 1);
+	u32 len = end + 1 - start;
 	bool completed_ordered = false;
 
-	/*
-	 * For regular sectorsize == PAGE_SIZE, if the ordered extent covers
-	 * the page, then it must cover the full page.
-	 */
-	ASSERT(ordered->file_offset <= start &&
-	       ordered->file_offset + ordered->num_bytes > end);
 	/*
 	 * IO on this page will never be started, so we need to account
 	 * for any ordered extents now. Don't clear EXTENT_DELALLOC_NEW
