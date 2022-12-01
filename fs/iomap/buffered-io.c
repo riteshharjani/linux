@@ -585,14 +585,14 @@ static int iomap_write_begin_inline(const struct iomap_iter *iter,
 }
 
 static int iomap_write_begin(struct iomap_iter *iter, loff_t pos,
-		size_t len, struct folio **foliop)
+		size_t len, struct folio **foliop, unsigned fgp)
 {
 	const struct iomap_page_ops *page_ops = iter->iomap.page_ops;
 	const struct iomap *srcmap = iomap_iter_srcmap(iter);
 	struct folio *folio;
-	unsigned fgp = FGP_LOCK | FGP_WRITE | FGP_CREAT | FGP_STABLE | FGP_NOFS;
 	int status = 0;
 
+	fgp |= FGP_LOCK | FGP_WRITE | FGP_STABLE | FGP_NOFS;
 	if (iter->flags & IOMAP_NOWAIT)
 		fgp |= FGP_NOWAIT;
 
@@ -615,7 +615,12 @@ static int iomap_write_begin(struct iomap_iter *iter, loff_t pos,
 	folio = __filemap_get_folio(iter->inode->i_mapping, pos >> PAGE_SHIFT,
 			fgp, mapping_gfp_mask(iter->inode->i_mapping));
 	if (!folio) {
-		status = (iter->flags & IOMAP_NOWAIT) ? -EAGAIN : -ENOMEM;
+		if (!(fgp & FGP_CREAT))
+			status = -ENODATA;
+		else if (iter->flags & IOMAP_NOWAIT)
+			status = -EAGAIN;
+		else
+			status = -ENOMEM;
 		goto out_no_page;
 	}
 
@@ -791,7 +796,7 @@ again:
 			break;
 		}
 
-		status = iomap_write_begin(iter, pos, bytes, &folio);
+		status = iomap_write_begin(iter, pos, bytes, &folio, FGP_CREAT);
 		if (unlikely(status))
 			break;
 		if (iter->iomap.flags & IOMAP_F_STALE)
@@ -1101,7 +1106,7 @@ static loff_t iomap_unshare_iter(struct iomap_iter *iter)
 		unsigned long bytes = min_t(loff_t, PAGE_SIZE - offset, length);
 		struct folio *folio;
 
-		status = iomap_write_begin(iter, pos, bytes, &folio);
+		status = iomap_write_begin(iter, pos, bytes, &folio, FGP_CREAT);
 		if (unlikely(status))
 			return status;
 		if (iter->iomap.flags & IOMAP_F_STALE)
@@ -1147,10 +1152,14 @@ static loff_t iomap_zero_iter(struct iomap_iter *iter, bool *did_zero)
 	loff_t pos = iter->pos;
 	loff_t length = iomap_length(iter);
 	loff_t written = 0;
+	unsigned fgp = FGP_CREAT;
 
 	/* already zeroed?  we're done. */
-	if (srcmap->type == IOMAP_HOLE || srcmap->type == IOMAP_UNWRITTEN)
+	if (srcmap->type == IOMAP_HOLE)
 		return length;
+	/* only do page cache lookups over unwritten extents */
+	if (srcmap->type == IOMAP_UNWRITTEN)
+		fgp = 0;
 
 	do {
 		struct folio *folio;
@@ -1158,15 +1167,39 @@ static loff_t iomap_zero_iter(struct iomap_iter *iter, bool *did_zero)
 		size_t offset;
 		size_t bytes = min_t(u64, SIZE_MAX, length);
 
-		status = iomap_write_begin(iter, pos, bytes, &folio);
-		if (status)
+		status = iomap_write_begin(iter, pos, bytes, &folio, fgp);
+		if (status) {
+			if (status == -ENODATA) {
+				/*
+				 * No folio was found, so skip to the start of
+				 * the next potential entry in the page cache
+				 * and continue from there.
+				 */
+				if (bytes > PAGE_SIZE - offset_in_page(pos))
+					bytes = PAGE_SIZE - offset_in_page(pos);
+				goto loop_continue;
+			}
 			return status;
+		}
 		if (iter->iomap.flags & IOMAP_F_STALE)
 			break;
 
 		offset = offset_in_folio(folio, pos);
 		if (bytes > folio_size(folio) - offset)
 			bytes = folio_size(folio) - offset;
+
+		/*
+		 * If the folio over an unwritten extent is clean, then we
+		 * aren't going to touch the data in it at all. We don't want to
+		 * mark it dirty or change the uptodate state of data in the
+		 * page, so we just unlock it and skip to the next range over
+		 * the unwritten extent we need to check.
+		 */
+		if (srcmap->type == IOMAP_UNWRITTEN &&
+		    !folio_test_dirty(folio)) {
+			folio_unlock(folio);
+			goto loop_continue;
+		}
 
 		folio_zero_range(folio, offset, bytes);
 		folio_mark_accessed(folio);
@@ -1175,6 +1208,7 @@ static loff_t iomap_zero_iter(struct iomap_iter *iter, bool *did_zero)
 		if (WARN_ON_ONCE(bytes == 0))
 			return -EIO;
 
+loop_continue:
 		pos += bytes;
 		length -= bytes;
 		written += bytes;
