@@ -36,6 +36,8 @@ bool io_post_aux_cqe(struct io_ring_ctx *ctx, u64 user_data, s32 res, u32 cflags
 bool io_aux_cqe(struct io_ring_ctx *ctx, bool defer, u64 user_data, s32 res, u32 cflags,
 		bool allow_overflow);
 void __io_commit_cqring_flush(struct io_ring_ctx *ctx);
+bool io_post_aux_cqe_overflow(struct io_ring_ctx *ctx,
+			      u64 user_data, s32 res, u32 cflags);
 
 struct page **io_pin_pages(unsigned long ubuf, unsigned long len, int *npages);
 
