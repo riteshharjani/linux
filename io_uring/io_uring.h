@@ -36,6 +36,8 @@ bool io_post_aux_cqe(struct io_ring_ctx *ctx, u64 user_data, s32 res, u32 cflags
 bool io_aux_cqe(struct io_ring_ctx *ctx, bool defer, u64 user_data, s32 res, u32 cflags,
 		bool allow_overflow);
 void __io_commit_cqring_flush(struct io_ring_ctx *ctx);
+bool io_post_aux_cqe_overflow(struct io_ring_ctx *ctx,
+			      u64 user_data, s32 res, u32 cflags);
 
 struct page **io_pin_pages(unsigned long ubuf, unsigned long len, int *npages);
 
@@ -110,7 +112,7 @@ static inline struct io_uring_cqe *io_get_cqe(struct io_ring_ctx *ctx)
 	return io_get_cqe_overflow(ctx, false);
 }
 
-static inline bool io_fill_cqe_req(struct io_ring_ctx *ctx,
+static inline bool __io_fill_cqe_req(struct io_ring_ctx *ctx,
 				     struct io_kiocb *req)
 {
 	struct io_uring_cqe *cqe;
@@ -122,7 +124,7 @@ static inline bool io_fill_cqe_req(struct io_ring_ctx *ctx,
 	 */
 	cqe = io_get_cqe(ctx);
 	if (unlikely(!cqe))
-		return io_req_cqe_overflow(req);
+		return false;
 
 	trace_io_uring_complete(req->ctx, req, req->cqe.user_data,
 				req->cqe.res, req->cqe.flags,
@@ -143,6 +145,14 @@ static inline bool io_fill_cqe_req(struct io_ring_ctx *ctx,
 		WRITE_ONCE(cqe->big_cqe[1], extra2);
 	}
 	return true;
+}
+
+static inline bool io_fill_cqe_req(struct io_ring_ctx *ctx,
+				   struct io_kiocb *req)
+{
+	if (likely(__io_fill_cqe_req(ctx, req)))
+		return true;
+	return io_req_cqe_overflow(req);
 }
 
 static inline void req_set_fail(struct io_kiocb *req)

@@ -23,6 +23,16 @@ struct io_msg {
 	u32 flags;
 };
 
+/* post cqes to another ring */
+static int io_msg_post_cqe(struct io_ring_ctx *ctx,
+			   u64 user_data, s32 res, u32 cflags)
+{
+	if (!ctx->task_complete || current == ctx->submitter_task)
+		return io_post_aux_cqe(ctx, user_data, res, cflags);
+	else
+		return io_post_aux_cqe_overflow(ctx, user_data, res, cflags);
+}
+
 static int io_msg_ring_data(struct io_kiocb *req)
 {
 	struct io_ring_ctx *target_ctx = req->file->private_data;
@@ -31,7 +41,7 @@ static int io_msg_ring_data(struct io_kiocb *req)
 	if (msg->src_fd || msg->dst_fd || msg->flags)
 		return -EINVAL;
 
-	if (io_post_aux_cqe(target_ctx, msg->user_data, msg->len, 0))
+	if (io_msg_post_cqe(target_ctx, msg->user_data, msg->len, 0))
 		return 0;
 
 	return -EOVERFLOW;
@@ -116,7 +126,7 @@ static int io_msg_send_fd(struct io_kiocb *req, unsigned int issue_flags)
 	 * completes with -EOVERFLOW, then the sender must ensure that a
 	 * later IORING_OP_MSG_RING delivers the message.
 	 */
-	if (!io_post_aux_cqe(target_ctx, msg->user_data, msg->len, 0))
+	if (!io_msg_post_cqe(target_ctx, msg->user_data, msg->len, 0))
 		ret = -EOVERFLOW;
 out_unlock:
 	io_double_unlock_ctx(ctx, target_ctx, issue_flags);
