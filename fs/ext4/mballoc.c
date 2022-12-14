@@ -4021,7 +4021,13 @@ ext4_mb_pa_assert_overlap(struct ext4_allocation_context *ac,
 
 		spin_lock(&tmp_pa->pa_lock);
 		if (tmp_pa->pa_deleted == 0)
-			BUG_ON(!(start >= tmp_pa_end || end <= tmp_pa_start));
+			if (!(start >= tmp_pa_end || end <= tmp_pa_start)) {
+				while (1) {
+					pr_crit_ratelimited("%s: start=%u, end=%u, tmp_pa_start=%u, tmp_pa_end=%u\n",
+							__func__, start, end, tmp_pa_start, tmp_pa_end);
+					cond_resched();
+				}
+			}
 		spin_unlock(&tmp_pa->pa_lock);
 
 		iter = ext4_mb_pa_rb_next_iter(start, tmp_pa_start, iter);
