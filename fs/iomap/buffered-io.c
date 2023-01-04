@@ -535,9 +535,20 @@ void iomap_invalidate_folio(struct folio *folio, size_t offset, size_t len)
 		WARN_ON_ONCE(!folio_test_uptodate(folio) &&
 			     folio_test_dirty(folio));
 		iomap_page_release(folio);
+	} else {
+		iomap_clear_range_dirty(folio, to_iomap_page(folio), offset, len);
 	}
 }
 EXPORT_SYMBOL_GPL(iomap_invalidate_folio);
+
+bool iomap_dirty_folio(struct address_space *mapping, struct folio *folio)
+{
+	unsigned int nr_blocks = i_blocks_per_folio(mapping->host, folio);
+
+	iomap_set_range_dirty(folio, to_iomap_page(folio), 0, nr_blocks);
+	return filemap_dirty_folio(mapping, folio);
+}
+EXPORT_SYMBOL_GPL(iomap_dirty_folio);
 
 static void
 iomap_write_failed(struct inode *inode, loff_t pos, unsigned len)
@@ -1274,8 +1285,12 @@ static loff_t iomap_folio_mkwrite_iter(struct iomap_iter *iter,
 		block_commit_write(&folio->page, 0, length);
 	} else {
 		WARN_ON_ONCE(!folio_test_uptodate(folio));
-		iomap_set_range_dirty(folio, to_iomap_page(folio),
-				offset_in_folio(folio, iter->pos), length);
+		/* We need not set range dirty for iomap here.
+		 * This will anyway be taken care by iomap_dirty_folio callback
+		 * which is called from folio_mark_dirty().
+		 */
+//		iomap_set_range_dirty(folio, to_iomap_page(folio),
+//				offset_in_folio(folio, iter->pos), length);
 		folio_mark_dirty(folio);
 	}
 
