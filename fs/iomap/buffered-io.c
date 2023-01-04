@@ -63,7 +63,7 @@ iomap_page_create(struct inode *inode, struct folio *folio, unsigned int flags)
 	if (iop) {
 		spin_lock_init(&iop->state_lock);
 		if (folio_test_uptodate(folio))
-			bitmap_fill(iop->state, nr_blocks);
+			bitmap_set(iop->state, 0, nr_blocks);
 		folio_attach_private(folio, iop);
 	}
 	return iop;
