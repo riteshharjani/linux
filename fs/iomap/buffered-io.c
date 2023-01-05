@@ -63,7 +63,10 @@ iomap_page_create(struct inode *inode, struct folio *folio, unsigned int flags)
 	if (iop) {
 		spin_lock_init(&iop->state_lock);
 		if (folio_test_uptodate(folio))
-			bitmap_set(iop->state, 0, nr_blocks);
+			bitmap_fill(iop->state, nr_blocks);
+//		if (folio_test_uptodate(folio))
+//			bitmap_set(iop->state, offset_in_folio(folio, folio_pos(folio)), nr_blocks);
+		BUG_ON(folio_test_dirty(folio));
 		folio_attach_private(folio, iop);
 	}
 	return iop;
@@ -536,7 +539,8 @@ void iomap_invalidate_folio(struct folio *folio, size_t offset, size_t len)
 			     folio_test_dirty(folio));
 		iomap_page_release(folio);
 	} else {
-		iomap_clear_range_dirty(folio, to_iomap_page(folio), offset, len);
+		iomap_clear_range_dirty(folio, to_iomap_page(folio),
+								offset_in_folio(folio, offset), len);
 	}
 }
 EXPORT_SYMBOL_GPL(iomap_invalidate_folio);
@@ -545,7 +549,8 @@ bool iomap_dirty_folio(struct address_space *mapping, struct folio *folio)
 {
 	unsigned int nr_blocks = i_blocks_per_folio(mapping->host, folio);
 
-	iomap_set_range_dirty(folio, to_iomap_page(folio), 0, nr_blocks);
+	iomap_set_range_dirty(folio, to_iomap_page(folio),
+						  offset_in_folio(folio, folio_pos(folio)), nr_blocks);
 	return filemap_dirty_folio(mapping, folio);
 }
 EXPORT_SYMBOL_GPL(iomap_dirty_folio);
@@ -1289,8 +1294,8 @@ static loff_t iomap_folio_mkwrite_iter(struct iomap_iter *iter,
 		 * This will anyway be taken care by iomap_dirty_folio callback
 		 * which is called from folio_mark_dirty().
 		 */
-//		iomap_set_range_dirty(folio, to_iomap_page(folio),
-//				offset_in_folio(folio, iter->pos), length);
+		iomap_set_range_dirty(folio, to_iomap_page(folio),
+				offset_in_folio(folio, iter->pos), length);
 		folio_mark_dirty(folio);
 	}
 
