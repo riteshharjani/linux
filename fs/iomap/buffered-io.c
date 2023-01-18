@@ -62,11 +62,20 @@ iomap_page_create(struct inode *inode, struct folio *folio, unsigned int flags)
 		      gfp);
 	if (iop) {
 		spin_lock_init(&iop->state_lock);
-		if (folio_test_uptodate(folio))
-			bitmap_fill(iop->state, nr_blocks);
 //		if (folio_test_uptodate(folio))
-//			bitmap_set(iop->state, offset_in_folio(folio, folio_pos(folio)), nr_blocks);
-		BUG_ON(folio_test_dirty(folio));
+//			bitmap_fill(iop->state, nr_blocks);
+		if (folio_test_uptodate(folio)) {
+			unsigned start = offset_in_folio(folio,
+					folio_pos(folio)) >> inode->i_blkbits;
+			bitmap_set(iop->state, start, nr_blocks);
+		}
+		pr_crit_ratelimited("%s: %lu %llu\n", __func__, offset_in_folio(folio, folio_pos(folio)), folio_pos(folio));
+		if(folio_test_dirty(folio)) {
+			unsigned start = offset_in_folio(folio,
+					folio_pos(folio)) >> inode->i_blkbits;
+			start = start + nr_blocks;
+			bitmap_set(iop->state, start, nr_blocks);
+		}
 		folio_attach_private(folio, iop);
 	}
 	return iop;
@@ -538,10 +547,11 @@ void iomap_invalidate_folio(struct folio *folio, size_t offset, size_t len)
 		WARN_ON_ONCE(!folio_test_uptodate(folio) &&
 			     folio_test_dirty(folio));
 		iomap_page_release(folio);
-	} else {
-		iomap_clear_range_dirty(folio, to_iomap_page(folio),
-								offset_in_folio(folio, offset), len);
 	}
+//	else {
+//		iomap_clear_range_dirty(folio, to_iomap_page(folio),
+//								offset_in_folio(folio, offset), len);
+//	}
 }
 EXPORT_SYMBOL_GPL(iomap_invalidate_folio);
 
@@ -585,7 +595,8 @@ static int __iomap_write_begin(const struct iomap_iter *iter, loff_t pos,
 		size_t len, struct folio *folio)
 {
 	const struct iomap *srcmap = iomap_iter_srcmap(iter);
-	struct iomap_page *iop;
+	struct iomap_page *iop = iomap_page_create(iter->inode, folio,
+						   iter->flags);
 	loff_t block_size = i_blocksize(iter->inode);
 	loff_t block_start = round_down(pos, block_size);
 	loff_t block_end = round_up(pos + len, block_size);
@@ -597,7 +608,6 @@ static int __iomap_write_begin(const struct iomap_iter *iter, loff_t pos,
 		return 0;
 	folio_clear_error(folio);
 
-	iop = iomap_page_create(iter->inode, folio, iter->flags);
 	if ((iter->flags & IOMAP_NOWAIT) && !iop && nr_blocks > 1)
 		return -EAGAIN;
 
