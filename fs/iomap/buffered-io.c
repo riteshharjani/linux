@@ -97,7 +97,7 @@ static inline iop_test_dirty(struct iomap_page *iop, unsigned int pos,
 
 static struct iomap_page *
 iomap_page_create(struct inode *inode, struct folio *folio, unsigned int flags,
-		  bool from_writeback)
+		  bool is_dirty)
 {
 	struct iomap_page *iop = to_iomap_page(folio);
 	unsigned int nr_blocks = i_blocks_per_folio(inode, folio);
@@ -124,7 +124,7 @@ iomap_page_create(struct inode *inode, struct folio *folio, unsigned int flags,
 		 * tracking dirty bits here and set all bits as dirty if
 		 * the folio is marked uptodate.
 		 */
-		if (from_writeback && folio_test_uptodate(folio))
+		if (is_dirty && folio_test_uptodate(folio))
 			bitmap_fill(iop->state, 2 * nr_blocks);
 		else if (folio_test_uptodate(folio)) {
 			unsigned start = offset_in_folio(folio,
@@ -346,7 +346,8 @@ static int iomap_read_inline_data(const struct iomap_iter *iter,
 	if (WARN_ON_ONCE(size > iomap->length))
 		return -EIO;
 	if (offset > 0)
-		iop = iomap_page_create(iter->inode, folio, iter->flags, false);
+		iop = iomap_page_create(iter->inode, folio, iter->flags,
+					folio_test_dirty(folio));
 	else
 		iop = to_iomap_page(folio);
 
@@ -384,7 +385,8 @@ static loff_t iomap_readpage_iter(const struct iomap_iter *iter,
 		return iomap_read_inline_data(iter, folio);
 
 	/* zero post-eof blocks as the page may be mapped */
-	iop = iomap_page_create(iter->inode, folio, iter->flags, false);
+	iop = iomap_page_create(iter->inode, folio, iter->flags,
+				folio_test_dirty(folio));
 	iomap_adjust_read_range(iter->inode, folio, &pos, length, &poff, &plen);
 	if (plen == 0)
 		goto done;
@@ -654,7 +656,8 @@ static int __iomap_write_begin(const struct iomap_iter *iter, loff_t pos,
 {
 	const struct iomap *srcmap = iomap_iter_srcmap(iter);
 	struct iomap_page *iop = iomap_page_create(iter->inode, folio,
-						   iter->flags, false);
+						   iter->flags,
+						   folio_test_dirty(folio));
 	loff_t block_size = i_blocksize(iter->inode);
 	loff_t block_start = round_down(pos, block_size);
 	loff_t block_end = round_up(pos + len, block_size);
