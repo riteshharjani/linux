@@ -43,6 +43,58 @@ static inline struct iomap_page *to_iomap_page(struct folio *folio)
 
 static struct bio_set iomap_ioend_bioset;
 
+/*
+ * Accessor functions for setting/clearing/checking uptodate/dirty bits in
+ * iop->state bitmap.
+ * nrblocks is i_blocks_per_folio() which is passed in every
+ * function as the last argument for API consistency.
+ */
+static inline void iop_set_range_uptodate(struct iomap_page *iop,
+				unsigned int start, unsigned int len,
+				unsigned int nrblocks)
+{
+	bitmap_set(iop->state, start, len);
+}
+
+static inline void iop_set_range_dirty(struct iomap_page *iop,
+				unsigned int start, unsigned int len,
+				unsigned int nrblocks)
+{
+	bitmap_set(iop->state, start + nrblocks, len);
+}
+
+static inline void iop_clear_range_uptodate(struct iomap_page *iop,
+				unsigned int start, unsigned int len,
+				unsigned int nrblocks)
+{
+	return bitmap_clear(iop->state, start, len);
+}
+
+static inline void iop_clear_range_dirty(struct iomap_page *iop,
+				unsigned int start, unsigned int len,
+				unsigned int nrblocks)
+{
+	return bitmap_clear(iop->state, start + nrblocks, len);
+}
+
+static inline bool iop_full_uptodate(struct iomap_page *iop,
+				unsigned int nrblocks)
+{
+	return bitmap_full(iop->state, nrblocks);
+}
+
+static inline iop_test_uptodate(struct iomap_page *iop, unsigned int pos,
+				unsigned int nrblocks)
+{
+	return test_bit(iop->state, pos);
+}
+
+static inline iop_test_dirty(struct iomap_page *iop, unsigned int pos,
+			     unsigned int nrblocks)
+{
+	return test_bit(iop->state, pos + nrblocks)
+}
+
 static struct iomap_page *
 iomap_page_create(struct inode *inode, struct folio *folio, unsigned int flags,
 		  bool from_writeback)
