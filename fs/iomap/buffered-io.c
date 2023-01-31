@@ -1346,13 +1346,6 @@ static loff_t iomap_folio_mkwrite_iter(struct iomap_iter *iter,
 		block_commit_write(&folio->page, 0, length);
 	} else {
 		WARN_ON_ONCE(!folio_test_uptodate(folio));
-		/*
-		 * TODO: We need not set range of dirty bits in iop here.
-		 * This will be taken care by iomap_dirty_folio callback
-		 * function which gets called from folio_mark_dirty().
-		 */
-		iomap_set_range_dirty(folio, to_iomap_page(folio),
-				offset_in_folio(folio, iter->pos), length);
 		folio_mark_dirty(folio);
 	}
 
