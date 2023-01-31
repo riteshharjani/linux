@@ -25,13 +25,13 @@
 
 /*
  * Structure allocated for each folio when block size < folio size
- * to track sub-folio uptodate status and I/O completions.
+ * to track sub-folio uptodate state and I/O completions.
  */
 struct iomap_page {
 	atomic_t		read_bytes_pending;
 	atomic_t		write_bytes_pending;
-	spinlock_t		uptodate_lock;
-	unsigned long		uptodate[];
+	spinlock_t		state_lock;
+	unsigned long		state[];
 };
 
 static inline struct iomap_page *to_iomap_page(struct folio *folio)
@@ -42,6 +42,38 @@ static inline struct iomap_page *to_iomap_page(struct folio *folio)
 }
 
 static struct bio_set iomap_ioend_bioset;
+
+/*
+ * Accessor functions for setting/clearing/checking uptodate bits in
+ * iop->state bitmap.
+ * nrblocks is i_blocks_per_folio() which is passed in every
+ * function as the last argument for API consistency.
+ */
+static inline void iop_set_range_uptodate(struct iomap_page *iop,
+				unsigned int start, unsigned int len,
+				unsigned int nrblocks)
+{
+	bitmap_set(iop->state, start, len);
+}
+
+static inline void iop_clear_range_uptodate(struct iomap_page *iop,
+				unsigned int start, unsigned int len,
+				unsigned int nrblocks)
+{
+	bitmap_clear(iop->state, start, len);
+}
+
+static inline bool iop_test_uptodate(struct iomap_page *iop, unsigned int pos,
+				unsigned int nrblocks)
+{
+	return test_bit(pos, iop->state);
+}
+
+static inline bool iop_full_uptodate(struct iomap_page *iop,
+				unsigned int nrblocks)
+{
+	return bitmap_full(iop->state, nrblocks);
+}
 
 static struct iomap_page *
 iomap_page_create(struct inode *inode, struct folio *folio, unsigned int flags)
@@ -58,12 +90,12 @@ iomap_page_create(struct inode *inode, struct folio *folio, unsigned int flags)
 	else
 		gfp = GFP_NOFS | __GFP_NOFAIL;
 
-	iop = kzalloc(struct_size(iop, uptodate, BITS_TO_LONGS(nr_blocks)),
+	iop = kzalloc(struct_size(iop, state, BITS_TO_LONGS(nr_blocks)),
 		      gfp);
 	if (iop) {
-		spin_lock_init(&iop->uptodate_lock);
+		spin_lock_init(&iop->state_lock);
 		if (folio_test_uptodate(folio))
-			bitmap_fill(iop->uptodate, nr_blocks);
+			iop_set_range_uptodate(iop, 0, nr_blocks, nr_blocks);
 		folio_attach_private(folio, iop);
 	}
 	return iop;
@@ -79,7 +111,7 @@ static void iomap_page_release(struct folio *folio)
 		return;
 	WARN_ON_ONCE(atomic_read(&iop->read_bytes_pending));
 	WARN_ON_ONCE(atomic_read(&iop->write_bytes_pending));
-	WARN_ON_ONCE(bitmap_full(iop->uptodate, nr_blocks) !=
+	WARN_ON_ONCE(iop_full_uptodate(iop, nr_blocks) !=
 			folio_test_uptodate(folio));
 	kfree(iop);
 }
@@ -99,6 +131,7 @@ static void iomap_adjust_read_range(struct inode *inode, struct folio *folio,
 	size_t plen = min_t(loff_t, folio_size(folio) - poff, length);
 	unsigned first = poff >> block_bits;
 	unsigned last = (poff + plen - 1) >> block_bits;
+	unsigned int nr_blocks = i_blocks_per_folio(inode, folio);
 
 	/*
 	 * If the block size is smaller than the page size, we need to check the
@@ -110,7 +143,7 @@ static void iomap_adjust_read_range(struct inode *inode, struct folio *folio,
 
 		/* move forward for each leading block marked uptodate */
 		for (i = first; i <= last; i++) {
-			if (!test_bit(i, iop->uptodate))
+			if (!iop_test_uptodate(iop, i, nr_blocks))
 				break;
 			*pos += block_size;
 			poff += block_size;
@@ -120,7 +153,7 @@ static void iomap_adjust_read_range(struct inode *inode, struct folio *folio,
 
 		/* truncate len if we find any trailing uptodate block(s) */
 		for ( ; i <= last; i++) {
-			if (test_bit(i, iop->uptodate)) {
+			if (iop_test_uptodate(iop, i, nr_blocks)) {
 				plen -= (last - i + 1) * block_size;
 				last = i - 1;
 				break;
@@ -151,12 +184,13 @@ static void iomap_iop_set_range_uptodate(struct folio *folio,
 	unsigned first = off >> inode->i_blkbits;
 	unsigned last = (off + len - 1) >> inode->i_blkbits;
 	unsigned long flags;
+	unsigned int nr_blocks = i_blocks_per_folio(inode, folio);
 
-	spin_lock_irqsave(&iop->uptodate_lock, flags);
-	bitmap_set(iop->uptodate, first, last - first + 1);
-	if (bitmap_full(iop->uptodate, i_blocks_per_folio(inode, folio)))
+	spin_lock_irqsave(&iop->state_lock, flags);
+	iop_set_range_uptodate(iop, first, last - first + 1, nr_blocks);
+	if (iop_full_uptodate(iop, nr_blocks))
 		folio_mark_uptodate(folio);
-	spin_unlock_irqrestore(&iop->uptodate_lock, flags);
+	spin_unlock_irqrestore(&iop->state_lock, flags);
 }
 
 static void iomap_set_range_uptodate(struct folio *folio,
@@ -439,6 +473,7 @@ bool iomap_is_partially_uptodate(struct folio *folio, size_t from, size_t count)
 	struct iomap_page *iop = to_iomap_page(folio);
 	struct inode *inode = folio->mapping->host;
 	unsigned first, last, i;
+	unsigned int nr_blocks = i_blocks_per_folio(inode, folio);
 
 	if (!iop)
 		return false;
@@ -451,7 +486,7 @@ bool iomap_is_partially_uptodate(struct folio *folio, size_t from, size_t count)
 	last = (from + count - 1) >> inode->i_blkbits;
 
 	for (i = first; i <= last; i++)
-		if (!test_bit(i, iop->uptodate))
+		if (!iop_test_uptodate(iop, i, nr_blocks))
 			return false;
 	return true;
 }
@@ -1611,7 +1646,7 @@ iomap_writepage_map(struct iomap_writepage_ctx *wpc,
 	 * invalid, grab a new one.
 	 */
 	for (i = 0; i < nblocks && pos < end_pos; i++, pos += len) {
-		if (iop && !test_bit(i, iop->uptodate))
+		if (iop && !iop_test_uptodate(iop, i, nblocks))
 			continue;
 
 		error = wpc->ops->map_blocks(wpc, inode, pos);
