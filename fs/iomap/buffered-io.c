@@ -653,6 +653,10 @@ static int __iomap_write_begin(const struct iomap_iter *iter, loff_t pos,
 	size_t from = offset_in_folio(folio, pos), to = from + len;
 	size_t poff, plen;
 
+	if (pos <= folio_pos(folio) &&
+	    pos + len >= folio_pos(folio) + folio_size(folio))
+		return 0;
+
 	iop = iomap_page_create(iter->inode, folio, iter->flags,
 				folio_test_dirty(folio));
 
