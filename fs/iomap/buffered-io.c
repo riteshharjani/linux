@@ -562,13 +562,30 @@ static int __iomap_write_begin(const struct iomap_iter *iter, loff_t pos,
 	size_t from = offset_in_folio(folio, pos), to = from + len;
 	size_t poff, plen;
 
+	/*
+	 * If the write completely overlaps the current folio, then
+	 * entire folio will be dirtied so there is no need for
+	 * sub-folio state tracking structures to be attached to this folio.
+	 */
+
+	if (pos <= folio_pos(folio) &&
+	    pos + len >= folio_pos(folio) + folio_size(folio))
+		return 0;
+
+	iop = iomap_page_create(iter->inode, folio, iter->flags);
+
+	/*
+	 * If we don't have an iop and nr_blocks > 1 then return -EAGAIN here
+	 * even though the folio may be uptodate. To ensure we add sub-folio
+	 * state tracking structures to this folio.
+	 */
+	if ((iter->flags & IOMAP_NOWAIT) && !iop && nr_blocks > 1)
+		return -EAGAIN;
+
 	if (folio_test_uptodate(folio))
 		return 0;
 	folio_clear_error(folio);
 
-	iop = iomap_page_create(iter->inode, folio, iter->flags);
-	if ((iter->flags & IOMAP_NOWAIT) && !iop && nr_blocks > 1)
-		return -EAGAIN;
 
 	do {
 		iomap_adjust_read_range(iter->inode, folio, &block_start,
