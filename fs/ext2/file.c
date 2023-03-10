@@ -19,6 +19,7 @@
  * 	(jj@sunsite.ms.mff.cuni.cz)
  */
 
+#include "linux/fs.h"
 #include <linux/time.h>
 #include <linux/pagemap.h>
 #include <linux/dax.h>
@@ -161,12 +162,149 @@ int ext2_fsync(struct file *file, loff_t start, loff_t end, int datasync)
 	return ret;
 }
 
+static ssize_t ext2_dio_read_iter(struct kiocb *iocb, struct iov_iter *to)
+{
+	struct file *file = iocb->ki_filp;
+	struct inode *inode = file->f_mapping->host;
+	ssize_t ret;
+
+	inode_lock_shared(inode);
+	ret = iomap_dio_rw(iocb, to, &ext2_iomap_ops, NULL, 0, NULL, 0);
+	inode_unlock_shared(inode);
+
+	return ret;
+}
+
+static int ext2_dio_write_end_io(struct kiocb *iocb, ssize_t size,
+				 int error, unsigned int flags)
+{
+	loff_t pos = iocb->ki_pos;
+	struct inode *inode = file_inode(iocb->ki_filp);
+
+	if (error)
+		return error;
+
+	/*
+	 * TODO: remove this. Reason for ext4 to do this.
+	 * If we are extending the file, we have to update i_size here before
+	 * page cache gets invalidated in iomap_dio_rw(). Otherwise racing
+	 * buffered reads could zero out too much from page cache pages. Update
+	 * of on-disk size will happen later in ext4_dio_write_iter() where
+	 * we have enough information to also perform orphan list handling etc.
+	 * Note that we perform all extending writes synchronously under
+	 * i_rwsem held exclusively so i_size update is safe here in that case.
+	 * If the write was not extending, we cannot see pos > i_size here
+	 * because operations reducing i_size like truncate wait for all
+	 * outstanding DIO before updating i_size.
+	 */
+	/*
+	 * I couldn't find a place in iomap_dio_rw code where i_size_write is
+	 * done. Hence do it in ->end_io function
+	 * TODO: look if iomap should be doing this similar to dax/buff code.
+	 *
+	 */
+	pos += size;
+	if (pos > i_size_read(inode)) {
+		i_size_write(inode, pos);
+		mark_inode_dirty(inode);
+	}
+
+	return 0;
+}
+
+
+static const struct iomap_dio_ops ext2_dio_write_ops = {
+	.end_io = ext2_dio_write_end_io,
+};
+
+static ssize_t ext2_dio_write_iter(struct kiocb *iocb, struct iov_iter *from)
+{
+	struct file *file = iocb->ki_filp;
+	struct inode *inode = file->f_mapping->host;
+	ssize_t ret;
+	unsigned int flags = IOMAP_DIO_NOSYNC;
+	unsigned long blocksize = inode->i_sb->s_blocksize;
+
+
+	inode_lock(inode);
+	ret = generic_write_checks(iocb, from);
+	if (ret <= 0)
+		goto out_unlock;
+	ret = file_remove_privs(file);
+	if (ret)
+		goto out_unlock;
+	ret = file_update_time(file);
+	if (ret)
+		goto out_unlock;
+
+	/*
+	 * TODO: we pass IOMAP_DIO_NOSYNC because otherwise iomap_dio_rw()
+	 * calls for generic_write_sync in iomap_dio_complete()
+	 * ext2_fsync should be called w/o any inode lock.
+	 * Hence we call generic_write_sync, seperately after inode_dio_rw()
+	 * is done.
+	 */
+	if (iocb->ki_pos + from->count > i_size_read(inode))
+		flags |= IOMAP_DIO_FORCE_WAIT;
+
+	if (!IS_ALIGNED(iocb->ki_pos | iov_iter_count(from) | iov_iter_alignment(from), blocksize))
+		flags |= IOMAP_DIO_FORCE_WAIT;
+
+//	if (flags & IOMAP_DIO_FORCE_WAIT)
+//		inode_dio_wait(inode);
+
+	ret = iomap_dio_rw(iocb, from, &ext2_iomap_ops, &ext2_dio_write_ops,
+			   flags, NULL, 0);
+
+	if (ret == -ENOTBLK)
+		ret = 0;
+
+	/* we don't need below because of ext2_dio_write_ops
+	 * ->end_io always gets called from iomap_dio_complete
+	 */
+//	if (ret > 0 && iocb->ki_pos > i_size_read(inode)) {
+//		i_size_write(inode, iocb->ki_pos);
+//		mark_inode_dirty(inode);
+//	}
+
+	if (ret >= 0 && iov_iter_count(from)) {
+		loff_t pos, endbyte;
+		ssize_t status;
+		ssize_t ret2;
+
+		pos = iocb->ki_pos;
+		status = generic_perform_write(iocb, from);
+		if (unlikely(status < 0)) {
+			ret = status;
+			goto out_unlock;
+		}
+		endbyte = pos + status - 1;
+		ret2 = filemap_write_and_wait_range(inode->i_mapping, pos,
+						    endbyte);
+		if (ret2 == 0) {
+			iocb->ki_pos = endbyte + 1;
+			ret += status;
+			invalidate_mapping_pages(inode->i_mapping,
+						 pos >> PAGE_SHIFT,
+						 endbyte >> PAGE_SHIFT);
+		}
+	}
+out_unlock:
+	inode_unlock(inode);
+	if (ret > 0)
+		ret = generic_write_sync(iocb, ret);
+	return ret;
+}
+
 static ssize_t ext2_file_read_iter(struct kiocb *iocb, struct iov_iter *to)
 {
 #ifdef CONFIG_FS_DAX
 	if (IS_DAX(iocb->ki_filp->f_mapping->host))
 		return ext2_dax_read_iter(iocb, to);
 #endif
+	if (iocb->ki_flags & IOCB_DIRECT)
+		return ext2_dio_read_iter(iocb, to);
+
 	return generic_file_read_iter(iocb, to);
 }
 
@@ -176,6 +314,9 @@ static ssize_t ext2_file_write_iter(struct kiocb *iocb, struct iov_iter *from)
 	if (IS_DAX(iocb->ki_filp->f_mapping->host))
 		return ext2_dax_write_iter(iocb, from);
 #endif
+	if (iocb->ki_flags & IOCB_DIRECT)
+		return ext2_dio_write_iter(iocb, from);
+
 	return generic_file_write_iter(iocb, from);
 }
 
