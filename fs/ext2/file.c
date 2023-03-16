@@ -206,7 +206,7 @@ static int ext2_dio_write_end_io(struct kiocb *iocb, ssize_t size,
 	pos += size;
 	if (pos > i_size_read(inode)) {
 		i_size_write(inode, pos);
-		mark_inode_dirty(inode);
+		//mark_inode_dirty(inode);
 	}
 
 	return 0;
@@ -224,6 +224,8 @@ static ssize_t ext2_dio_write_iter(struct kiocb *iocb, struct iov_iter *from)
 	ssize_t ret;
 	unsigned int flags = IOMAP_DIO_NOSYNC;
 	unsigned long blocksize = inode->i_sb->s_blocksize;
+	loff_t offset = iocb->ki_pos;
+	loff_t count = iov_iter_count(from);
 
 
 	inode_lock(inode);
@@ -244,14 +246,11 @@ static ssize_t ext2_dio_write_iter(struct kiocb *iocb, struct iov_iter *from)
 	 * Hence we call generic_write_sync, seperately after inode_dio_rw()
 	 * is done.
 	 */
-	if (iocb->ki_pos + from->count > i_size_read(inode))
+	if (iocb->ki_pos + iov_iter_count(from) > i_size_read(inode))
 		flags |= IOMAP_DIO_FORCE_WAIT;
 
-	if (!IS_ALIGNED(iocb->ki_pos | iov_iter_count(from) | iov_iter_alignment(from), blocksize))
+	if (!IS_ALIGNED(iocb->ki_pos | iov_iter_alignment(from), blocksize))
 		flags |= IOMAP_DIO_FORCE_WAIT;
-
-//	if (flags & IOMAP_DIO_FORCE_WAIT)
-//		inode_dio_wait(inode);
 
 	ret = iomap_dio_rw(iocb, from, &ext2_iomap_ops, &ext2_dio_write_ops,
 			   flags, NULL, 0);
@@ -262,18 +261,27 @@ static ssize_t ext2_dio_write_iter(struct kiocb *iocb, struct iov_iter *from)
 	/* we don't need below because of ext2_dio_write_ops
 	 * ->end_io always gets called from iomap_dio_complete
 	 */
-//	if (ret > 0 && iocb->ki_pos > i_size_read(inode)) {
-//		i_size_write(inode, iocb->ki_pos);
-//		mark_inode_dirty(inode);
-//	}
+	if (ret > 0 && iocb->ki_pos > i_size_read(inode)) {
+		pr_crit_ratelimited("%s: ret=%ld, ki_pos=%lld count=%lu\n", __func__, ret, iocb->ki_pos, iov_iter_count(from));
+		i_size_write(inode, iocb->ki_pos);
+		//mark_inode_dirty(inode);
+	}
+	if (ret < 0 && ret != -EIOCBQUEUED) {
+		pr_crit_ratelimited("%s: error %ld doing iomap_dio\n", __func__, ret);
+		ext2_write_failed(inode->i_mapping, offset + count);
+	}
 
 	if (ret >= 0 && iov_iter_count(from)) {
 		loff_t pos, endbyte;
 		ssize_t status;
 		ssize_t ret2;
 
+		pr_crit_ratelimited("%s: fallback to buf-io ret=%ld, iov_iter_count=%lu\n", __func__,
+				    ret, iov_iter_count(from));
 		pos = iocb->ki_pos;
 		status = generic_perform_write(iocb, from);
+		if (iov_iter_count(from))
+			ext2_write_failed(inode->i_mapping, offset + count);
 		if (unlikely(status < 0)) {
 			ret = status;
 			goto out_unlock;
