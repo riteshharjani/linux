@@ -264,12 +264,18 @@ static ssize_t ext2_dio_write_iter(struct kiocb *iocb, struct iov_iter *from)
 	if (ret > 0 && iocb->ki_pos > i_size_read(inode)) {
 		pr_crit_ratelimited("%s: ret=%ld, ki_pos=%lld count=%lu\n", __func__, ret, iocb->ki_pos, iov_iter_count(from));
 		i_size_write(inode, iocb->ki_pos);
-		//mark_inode_dirty(inode);
+		// TODO: Check and remove.
+		// I think this entire if block is not required since we
+		// already handle this in ->end_io dio function
+		mark_inode_dirty(inode);
 	}
+
 	if (ret < 0 && ret != -EIOCBQUEUED) {
 		pr_crit_ratelimited("%s: error %ld doing iomap_dio\n", __func__, ret);
 		ext2_write_failed(inode->i_mapping, offset + count);
 	}
+	if (ret == -EIOCBQUEUED)
+		pr_crit_ratelimited("%s: async io %ld doing iomap_dio\n", __func__, ret);
 
 	if (ret >= 0 && iov_iter_count(from)) {
 		loff_t pos, endbyte;
@@ -280,8 +286,11 @@ static ssize_t ext2_dio_write_iter(struct kiocb *iocb, struct iov_iter *from)
 				    ret, iov_iter_count(from));
 		pos = iocb->ki_pos;
 		status = generic_perform_write(iocb, from);
-		if (iov_iter_count(from))
-			ext2_write_failed(inode->i_mapping, offset + count);
+		//TODO: should we add this here?
+		//I feel this is not required because ->write_end ext2 function
+		//should take care of this.
+//		if (iov_iter_count(from))
+//			ext2_write_failed(inode->i_mapping, offset + count);
 		if (unlikely(status < 0)) {
 			ret = status;
 			goto out_unlock;
