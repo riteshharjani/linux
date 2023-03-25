@@ -153,7 +153,9 @@ int ext2_fsync(struct file *file, loff_t start, loff_t end, int datasync)
 	int ret;
 	struct super_block *sb = file->f_mapping->host->i_sb;
 
-	ret = generic_file_fsync(file, start, end, datasync);
+	ret = __generic_file_fsync_nolock(file, start, end, datasync);
+	if (!ret)
+		ret = blkdev_issue_flush(sb->s_bdev);
 	if (ret == -EIO)
 		/* We don't really know where the IO error happened... */
 		ext2_error(sb, __func__,
