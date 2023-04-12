@@ -36,5 +36,5 @@ jobs:
     - name: Build kernel
       run: |
         make ARCH=${{ matrix.arch_config.arch }} CROSS_COMPILE=${{ matrix.arch_config.cross_compile }} ${{ matrix.arch_config.defconfig }}
-        make ARCH=${{ matrix.arch_config.arch }} CROSS_COMPILE=${{ matrix.arch_config.cross_compile }} -j$(nproc)
+        make ARCH=${{ matrix.arch_config.arch }} CROSS_COMPILE=${{ matrix.arch_config.cross_compile }} -j$(nproc) Werror=1
 
