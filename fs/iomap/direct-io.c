@@ -130,6 +130,7 @@ ssize_t iomap_dio_complete(struct iomap_dio *dio)
 	if (ret > 0)
 		ret += dio->done_before;
 
+	trace_iomap_dio_complete(iocb, dio->error, ret);
 	kfree(dio);
 
 	return ret;
@@ -681,6 +682,7 @@ iomap_dio_rw(struct kiocb *iocb, struct iov_iter *iter,
 	struct iomap_dio *dio;
 	ssize_t ret = 0;
 
+	trace_iomap_dio_rw_begin(iocb, iter, dio_flags, done_before, ret);
 	dio = __iomap_dio_rw(iocb, iter, ops, dops, dio_flags, private,
 			     done_before);
 	if (IS_ERR_OR_NULL(dio)) {
@@ -689,6 +691,7 @@ iomap_dio_rw(struct kiocb *iocb, struct iov_iter *iter,
 	}
 	ret = iomap_dio_complete(dio);
 out:
+	trace_iomap_dio_rw_end(iocb, iter, dio_flags, done_before, ret);
 	return ret;
 }
 EXPORT_SYMBOL_GPL(iomap_dio_rw);
