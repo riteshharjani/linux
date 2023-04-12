@@ -1,0 +1,40 @@
+name: Kernel CI
+
+on:
+  push:
+    branches:
+      - kernel-ci
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        arch_config:
+          - { arch: "arm", cross_compile: "arm-linux-gnueabihf-", defconfig: "defconfig" }
+          - { arch: "arm64", cross_compile: "aarch64-linux-gnu-", defconfig: "defconfig" }
+          - { arch: "powerpc", cross_compile: "powerpc-linux-gnu-", defconfig: "defconfig" }
+          - { arch: "powerpc", cross_compile: "powerpc-linux-gnu-", defconfig: "ppc32_allmodconfig" }
+          - { arch: "powerpc", cross_compile: "powerpc64le-linux-gnu-", defconfig: "defconfig" }
+          - { arch: "powerpc", cross_compile: "powerpc64le-linux-gnu-", defconfig: "pseries_defconfig" }
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v2
+
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          gcc-aarch64-linux-gnu \
+          gcc-arm-linux-gnueabihf \
+          gcc-powerpc64le-linux-gnu \
+          gcc-powerpc-linux-gnu
+        sudo apt-get install -y build-essential libncurses-dev bison flex libssl-dev bc libelf-dev fakeroot dkms
+
+    - name: Build kernel
+      run: |
+        make ARCH=${{ matrix.arch_config.arch }} CROSS_COMPILE=${{ matrix.arch_config.cross_compile }} ${{ matrix.arch_config.defconfig }}
+        make ARCH=${{ matrix.arch_config.arch }} CROSS_COMPILE=${{ matrix.arch_config.cross_compile }} -j$(nproc)
+
