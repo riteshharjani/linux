@@ -183,6 +183,96 @@ TRACE_EVENT(iomap_iter,
 		   (void *)__entry->caller)
 );
 
+#define TRACE_IOMAP_DIO_STRINGS \
+	{IOMAP_DIO_FORCE_WAIT, "DIO_FORCE_WAIT" }, \
+	{IOMAP_DIO_OVERWRITE_ONLY, "DIO_OVERWRITE_ONLY" }, \
+	{IOMAP_DIO_PARTIAL, "DIO_PARTIAL" }
+
+DECLARE_EVENT_CLASS(iomap_dio_class,
+	TP_PROTO(struct kiocb *iocb, struct iov_iter *iter,
+		 unsigned int dio_flags, u64 done_before, int ret),
+	TP_ARGS(iocb, iter, dio_flags, done_before, ret),
+	TP_STRUCT__entry(
+		__field(dev_t,	dev)
+		__field(ino_t,	ino)
+		__field(loff_t, isize)
+		__field(loff_t, pos)
+		__field(u64,	count)
+		__field(u64,	done_before)
+		__field(int,	ki_flags)
+		__field(unsigned int,	dio_flags)
+		__field(bool,	aio)
+		__field(int, ret)
+	),
+	TP_fast_assign(
+		__entry->dev = file_inode(iocb->ki_filp)->i_sb->s_dev;
+		__entry->ino = file_inode(iocb->ki_filp)->i_ino;
+		__entry->isize = file_inode(iocb->ki_filp)->i_size;
+		__entry->pos = iocb->ki_pos;
+		__entry->count = iov_iter_count(iter);
+		__entry->done_before = done_before;
+		__entry->dio_flags = dio_flags;
+		__entry->ki_flags = iocb->ki_flags;
+		__entry->aio = !is_sync_kiocb(iocb);
+		__entry->ret = ret;
+	),
+	TP_printk("dev %d:%d ino 0x%lx isize 0x%llx pos 0x%llx count %llu "
+		  "flags %s dio_flags %s done_before %llu aio %d ret %d",
+		  MAJOR(__entry->dev), MINOR(__entry->dev),
+		  __entry->ino,
+		  __entry->isize,
+		  __entry->pos,
+		  __entry->count,
+		  __print_flags(__entry->ki_flags, "|", TRACE_IOCB_STRINGS),
+		  __print_flags(__entry->dio_flags, "|", TRACE_IOMAP_DIO_STRINGS),
+		  __entry->done_before,
+		  __entry->aio,
+		  __entry->ret)
+)
+
+#define DEFINE_DIO_RW_EVENT(name)					\
+DEFINE_EVENT(iomap_dio_class, name,					\
+	TP_PROTO(struct kiocb *iocb, struct iov_iter *iter,		\
+		 unsigned int dio_flags, u64 done_before,		\
+		 int ret),						\
+	TP_ARGS(iocb, iter, dio_flags, done_before, ret))
+DEFINE_DIO_RW_EVENT(iomap_dio_rw_begin);
+DEFINE_DIO_RW_EVENT(iomap_dio_rw_end);
+
+TRACE_EVENT(iomap_dio_complete,
+	TP_PROTO(struct kiocb *iocb, int error, int ret),
+	TP_ARGS(iocb, error, ret),
+	TP_STRUCT__entry(
+		__field(dev_t,	dev)
+		__field(ino_t,	ino)
+		__field(loff_t, isize)
+		__field(loff_t, pos)
+		__field(int,	ki_flags)
+		__field(bool,	aio)
+		__field(int,	error)
+		__field(int,	ret)
+	),
+	TP_fast_assign(
+		__entry->dev = file_inode(iocb->ki_filp)->i_sb->s_dev;
+		__entry->ino = file_inode(iocb->ki_filp)->i_ino;
+		__entry->isize = file_inode(iocb->ki_filp)->i_size;
+		__entry->pos = iocb->ki_pos;
+		__entry->ki_flags = iocb->ki_flags;
+		__entry->aio = !is_sync_kiocb(iocb);
+		__entry->error = error;
+		__entry->ret = ret;
+	),
+	TP_printk("dev %d:%d ino 0x%lx isize 0x%llx pos 0x%llx flags %s aio %d error %d ret %d",
+		  MAJOR(__entry->dev), MINOR(__entry->dev),
+		  __entry->ino,
+		  __entry->isize,
+		  __entry->pos,
+		  __print_flags(__entry->ki_flags, "|", TRACE_IOCB_STRINGS),
+		  __entry->aio,
+		  __entry->error,
+		  __entry->ret)
+);
+
 #endif /* _IOMAP_TRACE_H */
 
 #undef TRACE_INCLUDE_PATH
