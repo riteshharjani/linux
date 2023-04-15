@@ -1134,7 +1134,7 @@ void ext4_mb_generate_buddy(struct super_block *sb,
  * for this page; do not hold this lock when calling this routine!
  */
 
-static int ext4_mb_init_cache(struct page *page, char *incore, gfp_t gfp)
+static int ext4_mb_init_cache(struct folio *folio, char *incore, gfp_t gfp)
 {
 	ext4_group_t ngroups;
 	int blocksize;
@@ -1151,7 +1151,6 @@ static int ext4_mb_init_cache(struct page *page, char *incore, gfp_t gfp)
 	char *data;
 	char *bitmap;
 	struct ext4_group_info *grinfo;
-	struct folio *folio = page_folio(page);
 
 	inode = folio->mapping->host;
 	sb = inode->i_sb;
@@ -1393,7 +1392,7 @@ int ext4_mb_init_group(struct super_block *sb, ext4_group_t group, gfp_t gfp)
 	}
 
 	folio = page_folio(e4b.bd_bitmap_page);
-	ret = ext4_mb_init_cache(&folio->page, NULL, gfp);
+	ret = ext4_mb_init_cache(folio, NULL, gfp);
 	if (ret)
 		goto err;
 	if (!folio_test_uptodate(folio)) {
@@ -1412,7 +1411,7 @@ int ext4_mb_init_group(struct super_block *sb, ext4_group_t group, gfp_t gfp)
 	}
 	/* init buddy cache */
 	folio = page_folio(e4b.bd_buddy_page);
-	ret = ext4_mb_init_cache(&folio->page, e4b.bd_bitmap, gfp);
+	ret = ext4_mb_init_cache(folio, e4b.bd_bitmap, gfp);
 	if (ret)
 		goto err;
 	if (!folio_test_uptodate(folio)) {
@@ -1500,7 +1499,7 @@ ext4_mb_load_buddy_gfp(struct super_block *sb, ext4_group_t group,
 				goto err;
 			}
 			if (!folio_test_uptodate(folio)) {
-				ret = ext4_mb_init_cache(&folio->page, NULL, gfp);
+				ret = ext4_mb_init_cache(folio, NULL, gfp);
 				if (ret) {
 					folio_unlock(folio);
 					goto err;
@@ -1543,7 +1542,7 @@ ext4_mb_load_buddy_gfp(struct super_block *sb, ext4_group_t group,
 				goto err;
 			}
 			if (!folio_test_uptodate(folio)) {
-				ret = ext4_mb_init_cache(&folio->page,
+				ret = ext4_mb_init_cache(folio,
 							 e4b->bd_bitmap, gfp);
 				if (ret) {
 					folio_unlock(folio);
