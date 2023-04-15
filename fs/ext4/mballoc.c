@@ -1368,7 +1368,7 @@ int ext4_mb_init_group(struct super_block *sb, ext4_group_t group, gfp_t gfp)
 
 	struct ext4_group_info *this_grp;
 	struct ext4_buddy e4b;
-	struct page *page;
+	struct folio *folio;
 	int ret = 0;
 
 	might_sleep();
@@ -1392,11 +1392,11 @@ int ext4_mb_init_group(struct super_block *sb, ext4_group_t group, gfp_t gfp)
 		goto err;
 	}
 
-	page = e4b.bd_bitmap_page;
-	ret = ext4_mb_init_cache(page, NULL, gfp);
+	folio = page_folio(e4b.bd_bitmap_page);
+	ret = ext4_mb_init_cache(&folio->page, NULL, gfp);
 	if (ret)
 		goto err;
-	if (!PageUptodate(page)) {
+	if (!folio_test_uptodate(folio)) {
 		ret = -EIO;
 		goto err;
 	}
@@ -1411,11 +1411,11 @@ int ext4_mb_init_group(struct super_block *sb, ext4_group_t group, gfp_t gfp)
 		goto err;
 	}
 	/* init buddy cache */
-	page = e4b.bd_buddy_page;
-	ret = ext4_mb_init_cache(page, e4b.bd_bitmap, gfp);
+	folio = page_folio(e4b.bd_buddy_page);
+	ret = ext4_mb_init_cache(&folio->page, e4b.bd_bitmap, gfp);
 	if (ret)
 		goto err;
-	if (!PageUptodate(page)) {
+	if (!folio_test_uptodate(folio)) {
 		ret = -EIO;
 		goto err;
 	}
