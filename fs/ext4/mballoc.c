@@ -1151,14 +1151,15 @@ static int ext4_mb_init_cache(struct page *page, char *incore, gfp_t gfp)
 	char *data;
 	char *bitmap;
 	struct ext4_group_info *grinfo;
+	struct folio *folio = page_folio(page);
 
-	inode = page->mapping->host;
+	inode = folio->mapping->host;
 	sb = inode->i_sb;
 	ngroups = ext4_get_groups_count(sb);
 	blocksize = i_blocksize(inode);
 	blocks_per_page = PAGE_SIZE / blocksize;
 
-	mb_debug(sb, "init page %lu\n", page->index);
+	mb_debug(sb, "init folio %lu\n", folio->index);
 
 	groups_per_page = blocks_per_page >> 1;
 	if (groups_per_page == 0)
@@ -1173,21 +1174,21 @@ static int ext4_mb_init_cache(struct page *page, char *incore, gfp_t gfp)
 	} else
 		bh = &bhs;
 
-	first_group = page->index * blocks_per_page / 2;
+	first_group = folio->index * blocks_per_page / 2;
 
-	/* read all groups the page covers into the cache */
+	/* read all groups the folio covers into the cache */
 	for (i = 0, group = first_group; i < groups_per_page; i++, group++) {
 		if (group >= ngroups)
 			break;
 
 		grinfo = ext4_get_group_info(sb, group);
 		/*
-		 * If page is uptodate then we came here after online resize
+		 * If folio is uptodate then we came here after online resize
 		 * which added some new uninitialized group info structs, so
-		 * we must skip all initialized uptodate buddies on the page,
+		 * we must skip all initialized uptodate buddies on the folio,
 		 * which may be currently in use by an allocating task.
 		 */
-		if (PageUptodate(page) && !EXT4_MB_GRP_NEED_INIT(grinfo)) {
+		if (folio_test_uptodate(folio) && !EXT4_MB_GRP_NEED_INIT(grinfo)) {
 			bh[i] = NULL;
 			continue;
 		}
@@ -1211,7 +1212,7 @@ static int ext4_mb_init_cache(struct page *page, char *incore, gfp_t gfp)
 			err = err2;
 	}
 
-	first_block = page->index * blocks_per_page;
+	first_block = folio->index * blocks_per_page;
 	for (i = 0; i < blocks_per_page; i++) {
 		group = (first_block + i) >> 1;
 		if (group >= ngroups)
@@ -1232,7 +1233,7 @@ static int ext4_mb_init_cache(struct page *page, char *incore, gfp_t gfp)
 		 * above
 		 *
 		 */
-		data = page_address(page) + (i * blocksize);
+		data = folio_address(folio) + (i * blocksize);
 		bitmap = bh[group - first_group]->b_data;
 
 		/*
@@ -1242,8 +1243,8 @@ static int ext4_mb_init_cache(struct page *page, char *incore, gfp_t gfp)
 		if ((first_block + i) & 1) {
 			/* this is block of buddy */
 			BUG_ON(incore == NULL);
-			mb_debug(sb, "put buddy for group %u in page %lu/%x\n",
-				group, page->index, i * blocksize);
+			mb_debug(sb, "put buddy for group %u in folio %lu/%x\n",
+				group, folio->index, i * blocksize);
 			trace_ext4_mb_buddy_bitmap_load(sb, group);
 			grinfo = ext4_get_group_info(sb, group);
 			grinfo->bb_fragments = 0;
@@ -1262,8 +1263,8 @@ static int ext4_mb_init_cache(struct page *page, char *incore, gfp_t gfp)
 		} else {
 			/* this is block of bitmap */
 			BUG_ON(incore != NULL);
-			mb_debug(sb, "put bitmap for group %u in page %lu/%x\n",
-				group, page->index, i * blocksize);
+			mb_debug(sb, "put bitmap for group %u in folio %lu/%x\n",
+				group, folio->index, i * blocksize);
 			trace_ext4_mb_bitmap_load(sb, group);
 
 			/* see comments in ext4_mb_put_pa() */
@@ -1281,7 +1282,8 @@ static int ext4_mb_init_cache(struct page *page, char *incore, gfp_t gfp)
 			incore = data;
 		}
 	}
-	SetPageUptodate(page);
+
+	folio_mark_uptodate(folio);
 
 out:
 	if (bh) {
