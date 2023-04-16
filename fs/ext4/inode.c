@@ -3157,7 +3157,7 @@ static int ext4_read_folio(struct file *file, struct folio *folio)
 	int ret = -EAGAIN;
 	struct inode *inode = folio->mapping->host;
 
-	trace_ext4_readpage(&folio->page);
+	trace_ext4_read_folio(folio);
 
 	if (ext4_has_inline_data(inode))
 		ret = ext4_readpage_inline(inode, folio);
@@ -3218,7 +3218,7 @@ static bool ext4_release_folio(struct folio *folio, gfp_t wait)
 {
 	journal_t *journal = EXT4_JOURNAL(folio->mapping->host);
 
-	trace_ext4_releasepage(&folio->page);
+	trace_ext4_release_folio(folio);
 
 	/* Page has dirty journalled data -> cannot release */
 	if (folio_test_checked(folio))
