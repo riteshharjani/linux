@@ -1,0 +1,63 @@
+name: kernel + qemu + xfstests
+
+on:
+  workflow_dispatch:
+
+jobs:
+  run_expect_script:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Check out repository
+      uses: actions/checkout@v3
+
+    - name: Set up Python 3.x
+      uses: actions/setup-python@v3
+      with:
+        python-version: '3.x'
+
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y python3 python3-pip
+        pip3 install pexpect
+        sudo apt-get install -y qemu-system-x86
+
+    - name: Download Ubuntu cloud image
+      run: |
+        wget https://cloud-images.ubuntu.com/focal/current/focal-server-cloudimg-amd64.img
+
+    - name: Run expect script
+      run: |
+        script= """import pexpect
+
+                # Change this to the path of your downloaded Ubuntu cloud image
+                cloud_image_path = './focal-server-cloudimg-amd64.img'
+
+                # Create a pexpect object to run the QEMU command
+                qemu_command = f'qemu-system-x86_64 -nographic -m 1024 -drive file={cloud_image_path},format=qcow2'
+                child = pexpect.spawn(qemu_command, timeout=300)
+
+                # Log in to the system
+                child.expect('Ubuntu .*')
+                child.sendline('ubuntu')
+
+                # Execute the commands
+                commands = ['ls', 'df -h', 'lsblk', 'mount', 'uname -a']
+                for command in commands:
+                    child.sendline(command)
+                    child.expect('ubuntu@.*')
+                    print(f'Output of \'{command}\':')
+                    print(child.before.decode('utf-8'))
+
+                # Exit QEMU
+                child.sendline('sudo poweroff')
+                child.expect(pexpect.EOF)
+                """
+        with open("expect_script.py", "w") as file:
+                # Write the multiline string to the file
+                file.write(script)
+        python3 expect_script.py
+
+
+
