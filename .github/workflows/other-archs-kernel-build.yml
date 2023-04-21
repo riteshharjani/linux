@@ -1,0 +1,57 @@
+name: Other Arch kernel build
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - 'kernelci-*'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: true
+      matrix:
+        arch_config:
+          - { arch: "arm", cross_compile: "arm-linux-gnueabihf-", defconfig: "defconfig" }
+            #          - { arch: "arm", cross_compile: "arm-linux-gnueabihf-", defconfig: "allmodconfig" }
+            #          - { arch: "arm", cross_compile: "arm-linux-gnueabihf-", defconfig: "allyesconfig" }
+          - { arch: "arm64", cross_compile: "aarch64-linux-gnu-", defconfig: "defconfig" }
+            #          - { arch: "arm64", cross_compile: "aarch64-linux-gnu-", defconfig: "allmodconfig" }
+            #          - { arch: "arm64", cross_compile: "aarch64-linux-gnu-", defconfig: "allyesconfig" }
+          - { arch: "powerpc", cross_compile: "powerpc-linux-gnu-", defconfig: "defconfig" }
+          - { arch: "powerpc", cross_compile: "powerpc-linux-gnu-", defconfig: "ppc32_allmodconfig" }
+            #          - { arch: "powerpc", cross_compile: "powerpc64le-linux-gnu-", defconfig: "defconfig" }
+          - { arch: "powerpc", cross_compile: "powerpc64le-linux-gnu-", defconfig: "pseries_defconfig" }
+            #          - { arch: "powerpc", cross_compile: "powerpc64le-linux-gnu-", defconfig: "allmodconfig" }
+            #          - { arch: "powerpc", cross_compile: "powerpc64le-linux-gnu-", defconfig: "allyesconfig" }
+          - { arch: "x86", cross_compile: "", defconfig: "defconfig" }
+            #          - { arch: "x86", cross_compile: "", defconfig: "allyesconfig" }
+            #          - { arch: "x86", cross_compile: "", defconfig: "allmodconfig" }
+          - { arch: "riscv", cross_compile: "riscv64-linux-gnu-", defconfig: "defconfig" }
+            #          - { arch: "riscv", cross_compile: "riscv64-linux-gnu-", defconfig: "allmodconfig" }
+            #          - { arch: "riscv", cross_compile: "riscv64-linux-gnu-", defconfig: "allyesconfig" }
+          - { arch: "s390", cross_compile: "s390x-linux-gnu-", defconfig: "defconfig" }
+          - { arch: "mips", cross_compile: "mips-linux-gnu-", defconfig: "defconfig" }
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v2
+
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get update && sudo apt-get install -y \
+          gcc-aarch64-linux-gnu \
+          gcc-arm-linux-gnueabihf \
+          gcc-powerpc-linux-gnu \
+          gcc-powerpc64le-linux-gnu \
+          gcc-riscv64-linux-gnu \
+          gcc-s390x-linux-gnu \
+          gcc-mips-linux-gnu \
+          gcc
+        sudo apt-get install -y build-essential libncurses-dev bison flex libssl-dev bc libelf-dev fakeroot dkms u-boot-tools
+    - name: Build kernel
+      run: |
+        make ARCH=${{ matrix.arch_config.arch }} CROSS_COMPILE=${{ matrix.arch_config.cross_compile }} ${{ matrix.arch_config.defconfig }}
+        make ARCH=${{ matrix.arch_config.arch }} CROSS_COMPILE=${{ matrix.arch_config.cross_compile }} -j$(nproc) Werror=1
+

@@ -1,0 +1,80 @@
+name: kernel + qemu + xfstests
+
+on:
+  workflow_dispatch:
+          #  push:
+          #    branches:
+          #      - 'kernelci-*'
+          #    paths:
+          #      - 'fs/**'		   	# run for fs/
+          #      - 'include/**'		# run if changes are in include/
+
+permissions:
+  contents: read
+  checks: write
+  id-token: write
+  pull-requests: write
+
+jobs:
+  build_kernel:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Check out repository
+      uses: actions/checkout@v3
+    - name: Install dependencies
+      run: |
+        sudo apt-get update && sudo apt-get install -y gcc
+        sudo apt-get install -y build-essential libncurses-dev bison flex libssl-dev bc libelf-dev fakeroot dkms
+    - name: Compile Linux
+      run: |
+        make defconfig
+        make -j$(nproc) Werror=1
+    - name: Set up Python 3.x
+      uses: actions/setup-python@v3
+      with:
+        python-version: '3.x'
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v3
+      with:
+        name: kernel_artifacts
+        path: |
+          arch/x86/boot/bzImage
+          arch/x86/boot/.config
+          System.map
+          vmlinux
+
+  run_qemu:
+    needs: build_kernel
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v3
+    - name: Download artifacts
+      uses: actions/download-artifact@v3
+      with:
+        name: kernel_artifacts
+    - name: Install dependencies
+      run: |
+        sudo apt-get update && sudo apt-get install -y gcc
+        sudo apt-get install -y python3 python3-pip
+        pip3 install pexpect
+        sudo apt-get install -y qemu-system-x86
+        sudo apt-get install -y qemu-utils
+    - name: Set up Python 3.x
+      uses: actions/setup-python@v3
+      with:
+        python-version: '3.x'
+    - name: Download Ubuntu cloud image
+      run: |
+        wget https://cloud-images.ubuntu.com/focal/current/jammy-server-cloudimg-amd64.img
+        qemu-img resize jammy-server-cloudimg-amd64.img +20G
+    - name: Run expect script
+      continue-on-error: true
+      run: |
+        pwd
+        ls
+        mount
+        df -h
+        cat .github/workflows/expect_script.py
+        python3 .github/workflows/expect_script.py
