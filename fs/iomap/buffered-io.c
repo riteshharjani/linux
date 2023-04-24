@@ -1046,6 +1046,12 @@ static int iomap_write_delalloc_scan(struct inode *inode,
 {
 	while (start_byte < end_byte) {
 		struct folio	*folio;
+		size_t first, last;
+		loff_t end;
+		unsigned int i;
+		struct iomap_page *iop;
+		u8 blkbits = inode->i_blkbits;
+		unsigned int nr_blocks;
 
 		/* grab locked page */
 		folio = filemap_lock_folio(inode->i_mapping,
@@ -1070,6 +1076,20 @@ static int iomap_write_delalloc_scan(struct inode *inode,
 				}
 			}
 
+			iop = to_iomap_page(folio);
+			if (!iop)
+				goto skip_subfolio_punch;
+			end = min_t(loff_t, end_byte - 1,
+				(folio_next_index(folio) << PAGE_SHIFT) - 1);
+			first = offset_in_folio(folio, start_byte) >> blkbits;
+			last = offset_in_folio(folio, end) >> blkbits;
+			nr_blocks = i_blocks_per_folio(inode, folio);
+			for (i = first; i <= last; i++) {
+				if (!iop_test_dirty(iop, i, nr_blocks))
+					punch(inode, i << blkbits,
+							1 << blkbits);
+			}
+skip_subfolio_punch:
 			/*
 			 * Make sure the next punch start is correctly bound to
 			 * the end of this data range, not the end of the folio.
