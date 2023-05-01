@@ -1076,6 +1076,12 @@ static int iomap_write_delalloc_scan(struct inode *inode,
 				}
 			}
 
+			/*
+			 * When we have subfolio dirty tracking, there can be
+			 * subblocks within a folio which are marked uptodate
+			 * but not dirty. In that case it is necessary to punch
+			 * out such blocks to avoid leaking delalloc blocks.
+			 */
 			iop = to_iomap_page(folio);
 			if (!iop)
 				goto skip_subfolio_punch;
