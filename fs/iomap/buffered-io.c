@@ -71,7 +71,7 @@ iomap_page_create(struct inode *inode, struct folio *folio, unsigned int flags)
 
 static void iomap_page_release(struct folio *folio)
 {
-	struct iomap_page *iop = folio_detach_private(folio);
+	struct iomap_page *iop = to_iomap_page(folio);
 	struct inode *inode = folio->mapping->host;
 	unsigned int nr_blocks = i_blocks_per_folio(inode, folio);
 
@@ -81,6 +81,7 @@ static void iomap_page_release(struct folio *folio)
 	WARN_ON_ONCE(atomic_read(&iop->write_bytes_pending));
 	WARN_ON_ONCE(bitmap_full(iop->uptodate, nr_blocks) !=
 			folio_test_uptodate(folio));
+	folio_detach_private(folio);
 	kfree(iop);
 }
 
