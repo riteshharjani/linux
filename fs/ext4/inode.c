@@ -1037,7 +1037,7 @@ static int ext4_block_write_begin(struct folio *folio, loff_t pos, unsigned len,
 
 	head = folio_buffers(folio);
 	if (!head) {
-		create_empty_buffers(&folio->page, blocksize, 0);
+		folio_create_empty_buffers(folio, blocksize, 0);
 		head = folio_buffers(folio);
 	}
 	bbits = ilog2(blocksize);
@@ -1169,7 +1169,7 @@ retry_grab:
 	 * starting the handle.
 	 */
 	if (!folio_buffers(folio))
-		create_empty_buffers(&folio->page, inode->i_sb->s_blocksize, 0);
+		folio_create_empty_buffers(folio, inode->i_sb->s_blocksize, 0);
 
 	folio_unlock(folio);
 
@@ -3636,7 +3636,7 @@ static int __ext4_block_zero_page_range(handle_t *handle,
 
 	bh = folio_buffers(folio);
 	if (!bh) {
-		create_empty_buffers(&folio->page, blocksize, 0);
+		folio_create_empty_buffers(folio, blocksize, 0);
 		bh = folio_buffers(folio);
 	}
 
