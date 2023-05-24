@@ -2062,7 +2062,7 @@ static void ext4_mb_check_limits(struct ext4_allocation_context *ac,
 	if (bex->fe_len < gex->fe_len)
 		return;
 
-	if (finish_group)
+	if (finish_group || ac->ac_found > sbi->s_mb_min_to_scan)
 		ext4_mb_use_best_found(ac, e4b);
 }
 
