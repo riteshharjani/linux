@@ -85,6 +85,63 @@ static void iomap_iop_set_range_uptodate(struct inode *inode,
 		folio_mark_uptodate(folio);
 }
 
+static bool iop_test_block_dirty(struct folio *folio, int block)
+{
+	struct iomap_page *iop = to_iomap_page(folio);
+	struct inode *inode = folio->mapping->host;
+	unsigned int blks_per_folio = i_blocks_per_folio(inode, folio);
+
+	return test_bit(block + blks_per_folio, iop->state);
+}
+
+static void iop_set_range_dirty(struct inode *inode, struct folio *folio,
+				size_t off, size_t len)
+{
+	struct iomap_page *iop = to_iomap_page(folio);
+	unsigned int blks_per_folio = i_blocks_per_folio(inode, folio);
+	unsigned int first_blk = off >> inode->i_blkbits;
+	unsigned int last_blk = (off + len - 1) >> inode->i_blkbits;
+	unsigned int nr_blks = last_blk - first_blk + 1;
+	unsigned long flags;
+
+	spin_lock_irqsave(&iop->state_lock, flags);
+	bitmap_set(iop->state, first_blk + blks_per_folio, nr_blks);
+	spin_unlock_irqrestore(&iop->state_lock, flags);
+}
+
+static void iomap_iop_set_range_dirty(struct inode *inode, struct folio *folio,
+				size_t off, size_t len)
+{
+	struct iomap_page *iop = to_iomap_page(folio);
+
+	if (iop)
+		iop_set_range_dirty(inode, folio, off, len);
+}
+
+static void iop_clear_range_dirty(struct inode *inode, struct folio *folio,
+				  size_t off, size_t len)
+{
+	struct iomap_page *iop = to_iomap_page(folio);
+	unsigned int blks_per_folio = i_blocks_per_folio(inode, folio);
+	unsigned int first_blk = off >> inode->i_blkbits;
+	unsigned int last_blk = (off + len - 1) >> inode->i_blkbits;
+	unsigned int nr_blks = last_blk - first_blk + 1;
+	unsigned long flags;
+
+	spin_lock_irqsave(&iop->state_lock, flags);
+	bitmap_clear(iop->state, first_blk + blks_per_folio, nr_blks);
+	spin_unlock_irqrestore(&iop->state_lock, flags);
+}
+
+static void iomap_iop_clear_range_dirty(struct inode *inode,
+				struct folio *folio, size_t off, size_t len)
+{
+	struct iomap_page *iop = to_iomap_page(folio);
+
+	if (iop)
+		iop_clear_range_dirty(inode, folio, off, len);
+}
+
 static struct iomap_page *iomap_iop_alloc(struct inode *inode,
 				struct folio *folio, unsigned int flags)
 {
@@ -100,12 +157,20 @@ static struct iomap_page *iomap_iop_alloc(struct inode *inode,
 	else
 		gfp = GFP_NOFS | __GFP_NOFAIL;
 
-	iop = kzalloc(struct_size(iop, state, BITS_TO_LONGS(nr_blocks)),
+	/*
+	 * iop->state tracks two sets of state flags when the
+	 * filesystem block size is smaller than the folio size.
+	 * The first state tracks per-block uptodate and the
+	 * second tracks per-block dirty state.
+	 */
+	iop = kzalloc(struct_size(iop, state, BITS_TO_LONGS(2 * nr_blocks)),
 		      gfp);
 	if (iop) {
 		spin_lock_init(&iop->state_lock);
 		if (folio_test_uptodate(folio))
-			bitmap_fill(iop->state, nr_blocks);
+			bitmap_set(iop->state, 0, nr_blocks);
+		if (folio_test_dirty(folio))
+			bitmap_set(iop->state, nr_blocks, nr_blocks);
 		folio_attach_private(folio, iop);
 	}
 	return iop;
@@ -536,6 +601,18 @@ void iomap_invalidate_folio(struct folio *folio, size_t offset, size_t len)
 }
 EXPORT_SYMBOL_GPL(iomap_invalidate_folio);
 
+bool iomap_dirty_folio(struct address_space *mapping, struct folio *folio)
+{
+	struct iomap_page __maybe_unused *iop;
+	struct inode *inode = mapping->host;
+	size_t len = folio_size(folio);
+
+	iop = iomap_iop_alloc(inode, folio, 0);
+	iomap_iop_set_range_dirty(inode, folio, 0, len);
+	return filemap_dirty_folio(mapping, folio);
+}
+EXPORT_SYMBOL_GPL(iomap_dirty_folio);
+
 static void
 iomap_write_failed(struct inode *inode, loff_t pos, unsigned len)
 {
@@ -742,6 +819,8 @@ static size_t __iomap_write_end(struct inode *inode, loff_t pos, size_t len,
 		return 0;
 	iomap_iop_set_range_uptodate(inode, folio, offset_in_folio(folio, pos),
 				     len);
+	iomap_iop_set_range_dirty(inode, folio, offset_in_folio(folio, pos),
+				  copied);
 	filemap_dirty_folio(inode->i_mapping, folio);
 	return copied;
 }
@@ -906,6 +985,61 @@ iomap_file_buffered_write(struct kiocb *iocb, struct iov_iter *i,
 }
 EXPORT_SYMBOL_GPL(iomap_file_buffered_write);
 
+static int iomap_write_delalloc_punch(struct inode *inode, struct folio *folio,
+		loff_t *punch_start_byte, loff_t start_byte, loff_t end_byte,
+		int (*punch)(struct inode *inode, loff_t offset, loff_t length))
+{
+	struct iomap_page *iop;
+	unsigned int first_blk, last_blk, i;
+	loff_t last_byte;
+	u8 blkbits = inode->i_blkbits;
+	int ret = 0;
+
+	if (start_byte > *punch_start_byte) {
+		ret = punch(inode, *punch_start_byte,
+				start_byte - *punch_start_byte);
+		if (ret)
+			goto out_err;
+	}
+	/*
+	 * When we have per-block dirty tracking, there can be
+	 * blocks within a folio which are marked uptodate
+	 * but not dirty. In that case it is necessary to punch
+	 * out such blocks to avoid leaking any delalloc blocks.
+	 */
+	iop = to_iomap_page(folio);
+	if (!iop)
+		goto skip_iop_punch;
+
+	last_byte = min_t(loff_t, end_byte - 1,
+		(folio_next_index(folio) << PAGE_SHIFT) - 1);
+	first_blk = offset_in_folio(folio, start_byte) >> blkbits;
+	last_blk = offset_in_folio(folio, last_byte) >> blkbits;
+	for (i = first_blk; i <= last_blk; i++) {
+		if (!iop_test_block_dirty(folio, i)) {
+			ret = punch(inode, i << blkbits, 1 << blkbits);
+			if (ret)
+				goto out_err;
+		}
+	}
+
+skip_iop_punch:
+	/*
+	 * Make sure the next punch start is correctly bound to
+	 * the end of this data range, not the end of the folio.
+	 */
+	*punch_start_byte = min_t(loff_t, end_byte,
+			folio_next_index(folio) << PAGE_SHIFT);
+
+	return ret;
+
+out_err:
+	folio_unlock(folio);
+	folio_put(folio);
+	return ret;
+
+}
+
 /*
  * Scan the data range passed to us for dirty page cache folios. If we find a
  * dirty folio, punch out the preceeding range and update the offset from which
@@ -940,26 +1074,9 @@ static int iomap_write_delalloc_scan(struct inode *inode,
 		}
 
 		/* if dirty, punch up to offset */
-		if (folio_test_dirty(folio)) {
-			if (start_byte > *punch_start_byte) {
-				int	error;
-
-				error = punch(inode, *punch_start_byte,
-						start_byte - *punch_start_byte);
-				if (error) {
-					folio_unlock(folio);
-					folio_put(folio);
-					return error;
-				}
-			}
-
-			/*
-			 * Make sure the next punch start is correctly bound to
-			 * the end of this data range, not the end of the folio.
-			 */
-			*punch_start_byte = min_t(loff_t, end_byte,
-					folio_next_index(folio) << PAGE_SHIFT);
-		}
+		if (folio_test_dirty(folio))
+			iomap_write_delalloc_punch(inode, folio, punch_start_byte,
+					   start_byte, end_byte, punch);
 
 		/* move offset to start of next folio in range */
 		start_byte = folio_next_index(folio) << PAGE_SHIFT;
@@ -1641,13 +1758,18 @@ iomap_writepage_map(struct iomap_writepage_ctx *wpc,
 		struct writeback_control *wbc, struct inode *inode,
 		struct folio *folio, u64 end_pos)
 {
-	struct iomap_page *iop = iomap_iop_alloc(inode, folio, 0);
+	struct iomap_page *iop = to_iomap_page(folio);
 	struct iomap_ioend *ioend, *next;
 	unsigned len = i_blocksize(inode);
 	unsigned nblocks = i_blocks_per_folio(inode, folio);
 	u64 pos = folio_pos(folio);
 	int error = 0, count = 0, i;
 	LIST_HEAD(submit_list);
+
+	if (!iop && nblocks > 1) {
+		iop = iomap_iop_alloc(inode, folio, 0);
+		iomap_iop_set_range_dirty(inode, folio, 0, folio_size(folio));
+	}
 
 	WARN_ON_ONCE(iop && atomic_read(&iop->write_bytes_pending) != 0);
 
@@ -1657,7 +1779,7 @@ iomap_writepage_map(struct iomap_writepage_ctx *wpc,
 	 * invalid, grab a new one.
 	 */
 	for (i = 0; i < nblocks && pos < end_pos; i++, pos += len) {
-		if (iop && !iop_test_block_uptodate(folio, i))
+		if (iop && !iop_test_block_dirty(folio, i))
 			continue;
 
 		error = wpc->ops->map_blocks(wpc, inode, pos);
@@ -1701,6 +1823,8 @@ iomap_writepage_map(struct iomap_writepage_ctx *wpc,
 		}
 	}
 
+	iomap_iop_clear_range_dirty(inode, folio, 0,
+				    end_pos - folio_pos(folio));
 	folio_start_writeback(folio);
 	folio_unlock(folio);
 
