@@ -34,7 +34,7 @@ struct iomap_page {
 	unsigned long		uptodate[];
 };
 
-static inline struct iomap_page *to_iomap_page(struct folio *folio)
+static inline struct iomap_page *iomap_get_iop(struct folio *folio)
 {
 	if (folio_test_private(folio))
 		return folio_get_private(folio);
@@ -43,10 +43,10 @@ static inline struct iomap_page *to_iomap_page(struct folio *folio)
 
 static struct bio_set iomap_ioend_bioset;
 
-static struct iomap_page *
-iomap_page_create(struct inode *inode, struct folio *folio, unsigned int flags)
+static struct iomap_page *iomap_iop_alloc(struct inode *inode,
+				struct folio *folio, unsigned int flags)
 {
-	struct iomap_page *iop = to_iomap_page(folio);
+	struct iomap_page *iop = iomap_get_iop(folio);
 	unsigned int nr_blocks = i_blocks_per_folio(inode, folio);
 	gfp_t gfp;
 
@@ -69,7 +69,7 @@ iomap_page_create(struct inode *inode, struct folio *folio, unsigned int flags)
 	return iop;
 }
 
-static void iomap_page_release(struct folio *folio)
+static void iomap_iop_free(struct folio *folio)
 {
 	struct iomap_page *iop = folio_detach_private(folio);
 	struct inode *inode = folio->mapping->host;
@@ -90,7 +90,7 @@ static void iomap_page_release(struct folio *folio)
 static void iomap_adjust_read_range(struct inode *inode, struct folio *folio,
 		loff_t *pos, loff_t length, size_t *offp, size_t *lenp)
 {
-	struct iomap_page *iop = to_iomap_page(folio);
+	struct iomap_page *iop = iomap_get_iop(folio);
 	loff_t orig_pos = *pos;
 	loff_t isize = i_size_read(inode);
 	unsigned block_bits = inode->i_blkbits;
@@ -171,7 +171,7 @@ static void iomap_set_range_uptodate(struct folio *folio,
 static void iomap_finish_folio_read(struct folio *folio, size_t offset,
 		size_t len, int error)
 {
-	struct iomap_page *iop = to_iomap_page(folio);
+	struct iomap_page *iop = iomap_get_iop(folio);
 
 	if (unlikely(error)) {
 		folio_clear_uptodate(folio);
@@ -231,9 +231,9 @@ static int iomap_read_inline_data(const struct iomap_iter *iter,
 	if (WARN_ON_ONCE(size > iomap->length))
 		return -EIO;
 	if (offset > 0)
-		iop = iomap_page_create(iter->inode, folio, iter->flags);
+		iop = iomap_iop_alloc(iter->inode, folio, iter->flags);
 	else
-		iop = to_iomap_page(folio);
+		iop = iomap_get_iop(folio);
 
 	addr = kmap_local_folio(folio, offset);
 	memcpy(addr, iomap->inline_data, size);
@@ -269,7 +269,7 @@ static loff_t iomap_readpage_iter(const struct iomap_iter *iter,
 		return iomap_read_inline_data(iter, folio);
 
 	/* zero post-eof blocks as the page may be mapped */
-	iop = iomap_page_create(iter->inode, folio, iter->flags);
+	iop = iomap_iop_alloc(iter->inode, folio, iter->flags);
 	iomap_adjust_read_range(iter->inode, folio, &pos, length, &poff, &plen);
 	if (plen == 0)
 		goto done;
@@ -436,7 +436,7 @@ EXPORT_SYMBOL_GPL(iomap_readahead);
  */
 bool iomap_is_partially_uptodate(struct folio *folio, size_t from, size_t count)
 {
-	struct iomap_page *iop = to_iomap_page(folio);
+	struct iomap_page *iop = iomap_get_iop(folio);
 	struct inode *inode = folio->mapping->host;
 	unsigned first, last, i;
 
@@ -490,7 +490,7 @@ bool iomap_release_folio(struct folio *folio, gfp_t gfp_flags)
 	 */
 	if (folio_test_dirty(folio) || folio_test_writeback(folio))
 		return false;
-	iomap_page_release(folio);
+	iomap_iop_free(folio);
 	return true;
 }
 EXPORT_SYMBOL_GPL(iomap_release_folio);
@@ -507,12 +507,12 @@ void iomap_invalidate_folio(struct folio *folio, size_t offset, size_t len)
 	if (offset == 0 && len == folio_size(folio)) {
 		WARN_ON_ONCE(folio_test_writeback(folio));
 		folio_cancel_dirty(folio);
-		iomap_page_release(folio);
+		iomap_iop_free(folio);
 	} else if (folio_test_large(folio)) {
 		/* Must release the iop so the page can be split */
 		WARN_ON_ONCE(!folio_test_uptodate(folio) &&
 			     folio_test_dirty(folio));
-		iomap_page_release(folio);
+		iomap_iop_free(folio);
 	}
 }
 EXPORT_SYMBOL_GPL(iomap_invalidate_folio);
@@ -559,7 +559,8 @@ static int __iomap_write_begin(const struct iomap_iter *iter, loff_t pos,
 		return 0;
 	folio_clear_error(folio);
 
-	iop = iomap_page_create(iter->inode, folio, iter->flags);
+	iop = iomap_iop_alloc(iter->inode, folio, iter->flags);
+
 	if ((iter->flags & IOMAP_NOWAIT) && !iop && nr_blocks > 1)
 		return -EAGAIN;
 
@@ -696,7 +697,7 @@ out_unlock:
 static size_t __iomap_write_end(struct inode *inode, loff_t pos, size_t len,
 		size_t copied, struct folio *folio)
 {
-	struct iomap_page *iop = to_iomap_page(folio);
+	struct iomap_page *iop = iomap_get_iop(folio);
 	flush_dcache_folio(folio);
 
 	/*
@@ -1290,7 +1291,7 @@ EXPORT_SYMBOL_GPL(iomap_page_mkwrite);
 static void iomap_finish_folio_write(struct inode *inode, struct folio *folio,
 		size_t len, int error)
 {
-	struct iomap_page *iop = to_iomap_page(folio);
+	struct iomap_page *iop = iomap_get_iop(folio);
 
 	if (error) {
 		folio_set_error(folio);
@@ -1612,7 +1613,7 @@ iomap_writepage_map(struct iomap_writepage_ctx *wpc,
 		struct writeback_control *wbc, struct inode *inode,
 		struct folio *folio, u64 end_pos)
 {
-	struct iomap_page *iop = iomap_page_create(inode, folio, 0);
+	struct iomap_page *iop = iomap_iop_alloc(inode, folio, 0);
 	struct iomap_ioend *ioend, *next;
 	unsigned len = i_blocksize(inode);
 	unsigned nblocks = i_blocks_per_folio(inode, folio);
