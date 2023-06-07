@@ -488,9 +488,9 @@ static unsigned long pnv_memory_block_size(void)
 	 * this size.
 	 */
 	if (radix_enabled())
-		return radix_mem_block_size;
+		return 1UL << 30;
 	else
-		return 256UL * 1024 * 1024;
+		return 256UL << 20;
 }
 #endif
 
