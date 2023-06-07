@@ -885,13 +885,40 @@ void __init setup_per_cpu_areas(void)
 #endif
 
 #ifdef CONFIG_MEMORY_HOTPLUG
+static unsigned long set_mem_block_size;
 unsigned long memory_block_size_bytes(void)
 {
+	if (set_mem_block_size)
+		return set_mem_block_size;
+
 	if (ppc_md.memory_block_size)
 		return ppc_md.memory_block_size();
 
 	return MIN_MEMORY_BLOCK_SIZE;
 }
+
+/*
+ * Restrict to a power of 2 value for memblock which is larger than
+ * section size
+ */
+static int __init parse_mem_block_size(char *ptr)
+{
+	unsigned int order;
+	unsigned long size = memparse(ptr, NULL);
+
+	order = fls64(size);
+	if (!order)
+		return 0;
+
+	order--;
+	if (order < SECTION_SIZE_BITS)
+		return 0;
+
+	set_mem_block_size = 1UL << order;
+
+	return 0;
+}
+early_param("memory_block_size", parse_mem_block_size);
 #endif
 
 #if defined(CONFIG_PPC_INDIRECT_PIO) || defined(CONFIG_PPC_INDIRECT_MMIO)
