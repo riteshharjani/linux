@@ -6560,7 +6560,7 @@ error_return:
  * be called with under the group lock.
  */
 static int ext4_trim_extent(struct super_block *sb,
-		int start, int count, struct ext4_buddy *e4b)
+		int start, int count, struct ext4_buddy *e4b, struct bio **biop)
 __releases(bitlock)
 __acquires(bitlock)
 {
@@ -6582,7 +6582,7 @@ __acquires(bitlock)
 	 */
 	mb_mark_used(e4b, &ex);
 	ext4_unlock_group(sb, group);
-	ret = ext4_issue_discard(sb, group, start, count, NULL);
+	ret = ext4_issue_discard(sb, group, start, count, biop);
 	ext4_lock_group(sb, group);
 	mb_free_blocks(NULL, e4b, start, ex.fe_len);
 	return ret;
@@ -6596,12 +6596,15 @@ __releases(ext4_group_lock_ptr(sb, e4b->bd_group))
 {
 	ext4_grpblk_t next, count, free_count;
 	void *bitmap;
+	struct bio *discard_bio = NULL;
+	struct blk_plug plug;
 
 	bitmap = e4b->bd_bitmap;
 	start = (e4b->bd_info->bb_first_free > start) ?
 		e4b->bd_info->bb_first_free : start;
 	count = 0;
 	free_count = 0;
+	blk_start_plug(&plug);
 
 	while (start <= max) {
 		start = mb_find_next_zero_bit(bitmap, max + 1, start);
@@ -6610,7 +6613,7 @@ __releases(ext4_group_lock_ptr(sb, e4b->bd_group))
 		next = mb_find_next_bit(bitmap, max + 1, start);
 
 		if ((next - start) >= minblocks) {
-			int ret = ext4_trim_extent(sb, start, next - start, e4b);
+			int ret = ext4_trim_extent(sb, start, next - start, e4b, &discard_bio);
 
 			if (ret && ret != -EOPNOTSUPP)
 				break;
@@ -6633,6 +6636,14 @@ __releases(ext4_group_lock_ptr(sb, e4b->bd_group))
 		if ((e4b->bd_info->bb_free - free_count) < minblocks)
 			break;
 	}
+
+	if (discard_bio) {
+		ext4_unlock_group(sb, e4b->bd_group);
+		submit_bio_wait(discard_bio);
+		bio_put(discard_bio);
+		ext4_lock_group(sb, e4b->bd_group);
+	}
+	blk_finish_plug(&plug);
 
 	return count;
 }
