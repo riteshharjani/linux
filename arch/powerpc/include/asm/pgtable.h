@@ -168,6 +168,9 @@ static inline bool is_ioremap_addr(const void *x)
 
 struct seq_file;
 void arch_report_meminfo(struct seq_file *m);
+int __meminit vmemmap_populated(unsigned long vmemmap_addr, int vmemmap_map_size);
+bool altmap_cross_boundary(struct vmem_altmap *altmap, unsigned long start,
+			   unsigned long page_size);
 #endif /* CONFIG_PPC64 */
 
 #endif /* __ASSEMBLY__ */
