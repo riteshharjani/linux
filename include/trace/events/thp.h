@@ -25,6 +25,23 @@ TRACE_EVENT(hugepage_set_pmd,
 	    TP_printk("Set pmd with 0x%lx with 0x%lx", __entry->addr, __entry->pmd)
 );
 
+TRACE_EVENT(hugepage_set_pud,
+
+	    TP_PROTO(unsigned long addr, unsigned long pud),
+	    TP_ARGS(addr, pud),
+	    TP_STRUCT__entry(
+		    __field(unsigned long, addr)
+		    __field(unsigned long, pud)
+			    ),
+
+	    TP_fast_assign(
+		    __entry->addr = addr;
+		    __entry->pud = pud;
+		    ),
+
+	    TP_printk("Set pud with 0x%lx with 0x%lx", __entry->addr, __entry->pud)
+	);
+
 
 TRACE_EVENT(hugepage_update,
 
