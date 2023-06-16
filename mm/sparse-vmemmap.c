@@ -141,6 +141,7 @@ void __meminit vmemmap_verify(pte_t *pte, int node,
 			start, end - 1);
 }
 
+#ifndef vmemmap_populate_compound_pages
 pte_t * __meminit vmemmap_pte_populate(pmd_t *pmd, unsigned long addr, int node,
 				       struct vmem_altmap *altmap,
 				       struct page *reuse)
@@ -445,6 +446,8 @@ static int __meminit vmemmap_populate_compound_pages(unsigned long start_pfn,
 
 	return 0;
 }
+
+#endif
 
 struct page * __meminit __populate_section_memmap(unsigned long pfn,
 		unsigned long nr_pages, int nid, struct vmem_altmap *altmap,
