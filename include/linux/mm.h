@@ -31,6 +31,8 @@
 #include <linux/memremap.h>
 #include <linux/slab.h>
 
+#include <asm/page.h>
+
 struct mempolicy;
 struct anon_vma;
 struct anon_vma_chain;
@@ -3550,13 +3552,33 @@ void vmemmap_free(unsigned long start, unsigned long end,
 		struct vmem_altmap *altmap);
 #endif
 
+#define VMEMMAP_RESERVE_NR	2
 #ifdef CONFIG_ARCH_WANT_OPTIMIZE_VMEMMAP
-static inline bool vmemmap_can_optimize(struct vmem_altmap *altmap,
-					   struct dev_pagemap *pgmap)
+static inline bool __vmemmap_can_optimize(struct vmem_altmap *altmap,
+					  struct dev_pagemap *pgmap)
 {
-	return is_power_of_2(sizeof(struct page)) &&
-		pgmap && (pgmap_vmemmap_nr(pgmap) > 1) && !altmap;
+	if (pgmap) {
+		unsigned long nr_pages;
+		unsigned long nr_vmemmap_pages;
+
+		nr_pages = pgmap_vmemmap_nr(pgmap);
+		nr_vmemmap_pages = ((nr_pages * sizeof(struct page)) >> PAGE_SHIFT);
+		/*
+		 * For vmemmap optimization with DAX we need minimum 2 vmemmap
+		 * pages. See layout diagram in Documentation/mm/vmemmap_dedup.rst
+		 */
+		return is_power_of_2(sizeof(struct page)) &&
+			(nr_vmemmap_pages > VMEMMAP_RESERVE_NR) && !altmap;
+	}
+	return false;
 }
+/*
+ * If we don't have an architecture override, use the generic rule
+ */
+#ifndef vmemmap_can_optimize
+#define vmemmap_can_optimize __vmemmap_can_optimize
+#endif
+
 #else
 static inline bool vmemmap_can_optimize(struct vmem_altmap *altmap,
 					   struct dev_pagemap *pgmap)
