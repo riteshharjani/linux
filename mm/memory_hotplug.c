@@ -46,19 +46,9 @@
 /*
  * memory_hotplug.memmap_on_memory parameter
  */
-static bool memmap_on_memory __ro_after_init;
+bool memmap_on_memory __ro_after_init;
 module_param(memmap_on_memory, bool, 0444);
 MODULE_PARM_DESC(memmap_on_memory, "Enable memmap on memory for memory hotplug");
-
-static inline bool mhp_memmap_on_memory(void)
-{
-	return memmap_on_memory;
-}
-#else
-static inline bool mhp_memmap_on_memory(void)
-{
-	return false;
-}
 #endif
 
 enum {
@@ -1316,10 +1306,9 @@ bool __mhp_supports_memmap_on_memory(unsigned long size)
 	 *       altmap as an alternative source of memory, and we do not exactly
 	 *       populate a single PMD.
 	 */
-	return mhp_memmap_on_memory() &&
-	       size == memory_block_size_bytes() &&
-	       IS_ALIGNED(vmemmap_size, PMD_SIZE) &&
-	       IS_ALIGNED(remaining_size, (pageblock_nr_pages << PAGE_SHIFT));
+	return size == memory_block_size_bytes() &&
+		IS_ALIGNED(vmemmap_size, PMD_SIZE) &&
+		IS_ALIGNED(remaining_size, (pageblock_nr_pages << PAGE_SHIFT));
 }
 
 bool __weak mhp_supports_memmap_on_memory(unsigned long size)

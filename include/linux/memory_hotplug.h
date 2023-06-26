@@ -362,4 +362,18 @@ bool mhp_supports_memmap_on_memory(unsigned long size);
 bool __mhp_supports_memmap_on_memory(unsigned long size);
 #endif /* CONFIG_MEMORY_HOTPLUG */
 
+#ifdef CONFIG_MHP_MEMMAP_ON_MEMORY
+extern bool memmap_on_memory;
+static inline unsigned long get_memmap_on_memory_flags(void)
+{
+	if (memmap_on_memory)
+		return MHP_MEMMAP_ON_MEMORY;
+	return 0;
+}
+#else
+static inline unsigned long get_memmap_on_memory_flags(void)
+{
+	return 0;
+}
+#endif
 #endif /* __LINUX_MEMORY_HOTPLUG_H */
