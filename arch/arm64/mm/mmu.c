@@ -1335,6 +1335,11 @@ void arch_remove_memory(u64 start, u64 size, struct vmem_altmap *altmap)
 	__remove_pgd_mapping(swapper_pg_dir, __phys_to_virt(start), size);
 }
 
+bool mhp_supports_memmap_on_memory(unsigned long size)
+{
+	return __mhp_supports_memmap_on_memory(size);
+}
+
 /*
  * This memory hotplug notifier helps prevent boot memory from being
  * inadvertently removed as it blocks pfn range offlining process in
