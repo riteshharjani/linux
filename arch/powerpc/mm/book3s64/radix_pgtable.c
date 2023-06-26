@@ -1675,3 +1675,31 @@ int pmd_free_pte_page(pmd_t *pmd, unsigned long addr)
 
 	return 1;
 }
+
+/*
+ * mm/memory_hotplug.c:mhp_supports_memmap_on_memory goes into details
+ * some of the restrictions. We don't check for PMD_SIZE because our
+ * vmemmap allocation code can fallback correctly. The pageblock
+ * alignment requirement is met using altmap->reserve blocks.
+ */
+bool mhp_supports_memmap_on_memory(unsigned long size)
+{
+	if (!radix_enabled())
+		return false;
+	/*
+	 * The pageblock alignment requirement is met by using
+	 * reserve blocks in altmap.
+	 */
+	return size == memory_block_size_bytes();
+}
+
+unsigned long memory_block_align_base(struct resource *res)
+{
+	unsigned long base_pfn = PHYS_PFN(res->start);
+	unsigned long align, size = resource_size(res);
+	unsigned long nr_vmemmap_pages = size / PAGE_SIZE;
+	unsigned long vmemmap_size = (nr_vmemmap_pages * sizeof(struct page))/PAGE_SIZE;
+
+	align = pageblock_align(base_pfn + vmemmap_size) - (base_pfn + vmemmap_size);
+	return align;
+}
