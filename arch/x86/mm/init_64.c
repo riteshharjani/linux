@@ -1264,6 +1264,12 @@ void __ref arch_remove_memory(u64 start, u64 size, struct vmem_altmap *altmap)
 	__remove_pages(start_pfn, nr_pages, altmap);
 	kernel_physical_mapping_remove(start, start + size);
 }
+
+bool mhp_supports_memmap_on_memory(unsigned long size)
+{
+	return __mhp_supports_memmap_on_memory(size);
+}
+
 #endif /* CONFIG_MEMORY_HOTPLUG */
 
 static struct kcore_list kcore_vsyscall;
