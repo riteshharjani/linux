@@ -544,6 +544,9 @@ config MHP_MEMMAP_ON_MEMORY
 	depends on MEMORY_HOTPLUG && SPARSEMEM_VMEMMAP
 	depends on ARCH_MHP_MEMMAP_ON_MEMORY_ENABLE
 
+config ARCH_MHP_MEMMAP_ON_MEMORY_ENABLE
+       bool
+
 endif # MEMORY_HOTPLUG
 
 # Heavily threaded applications may benefit from splitting the mm-wide
