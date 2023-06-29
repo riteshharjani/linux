@@ -1984,8 +1984,8 @@ static int ext4_convert_meta_bg(struct super_block *sb, struct inode *inode)
 
 errout:
 	ret = ext4_journal_stop(handle);
-	if (!err)
-		err = ret;
+	if (!ret)
+		ret = err;
 	return ret;
 
 invalid_resize_inode:
