@@ -35,26 +35,6 @@ struct iomap_folio_state {
 	unsigned long		state[];
 };
 
-enum iomap_block_state {
-	IOMAP_ST_UPTODATE,
-	IOMAP_ST_DIRTY,
-
-	IOMAP_ST_MAX,
-};
-
-static void ifs_calc_range(struct folio *folio, size_t off, size_t len,
-		enum iomap_block_state state, unsigned int *first_blkp,
-		unsigned int *nr_blksp)
-{
-	struct inode *inode = folio->mapping->host;
-	unsigned int blks_per_folio = i_blocks_per_folio(inode, folio);
-	unsigned int first = off >> inode->i_blkbits;
-	unsigned int last = (off + len - 1) >> inode->i_blkbits;
-
-	*first_blkp = first + (state * blks_per_folio);
-	*nr_blksp = last - first + 1;
-}
-
 static struct bio_set iomap_ioend_bioset;
 
 static inline bool ifs_is_fully_uptodate(struct folio *folio,
@@ -62,30 +42,27 @@ static inline bool ifs_is_fully_uptodate(struct folio *folio,
 {
 	struct inode *inode = folio->mapping->host;
 	unsigned int blks_per_folio = i_blocks_per_folio(inode, folio);
-	unsigned int nr_blks = (IOMAP_ST_UPTODATE + 1) * blks_per_folio;
 
-	return bitmap_full(ifs->state, nr_blks);
+	return bitmap_full(ifs->state, blks_per_folio);
 }
 
 static inline bool ifs_block_is_uptodate(struct folio *folio,
 		struct iomap_folio_state *ifs, unsigned int block)
 {
-	struct inode *inode = folio->mapping->host;
-	unsigned int blks_per_folio = i_blocks_per_folio(inode, folio);
-
-	return test_bit(block + IOMAP_ST_UPTODATE * blks_per_folio, ifs->state);
+	return test_bit(block, ifs->state);
 }
 
 static void ifs_set_range_uptodate(struct folio *folio,
 		struct iomap_folio_state *ifs, size_t off, size_t len)
 {
-	unsigned int first_blk, nr_blks;
+	struct inode *inode = folio->mapping->host;
+	unsigned int first_bit = off >> inode->i_blkbits;
+	unsigned int last_bit = (off + len - 1) >> inode->i_blkbits;
+	unsigned int nr_bits = last_bit - first_bit + 1;
 	unsigned long flags;
 
-	ifs_calc_range(folio, off, len, IOMAP_ST_UPTODATE, &first_blk,
-			     &nr_blks);
 	spin_lock_irqsave(&ifs->state_lock, flags);
-	bitmap_set(ifs->state, first_blk, nr_blks);
+	bitmap_set(ifs->state, first_bit, nr_bits);
 	if (ifs_is_fully_uptodate(folio, ifs))
 		folio_mark_uptodate(folio);
 	spin_unlock_irqrestore(&ifs->state_lock, flags);
@@ -108,18 +85,21 @@ static inline bool ifs_block_is_dirty(struct folio *folio,
 	struct inode *inode = folio->mapping->host;
 	unsigned int blks_per_folio = i_blocks_per_folio(inode, folio);
 
-	return test_bit(block + IOMAP_ST_DIRTY * blks_per_folio, ifs->state);
+	return test_bit(block + blks_per_folio, ifs->state);
 }
 
 static void ifs_clear_range_dirty(struct folio *folio,
 		struct iomap_folio_state *ifs, size_t off, size_t len)
 {
-	unsigned int first_blk, nr_blks;
+	struct inode *inode = folio->mapping->host;
+	unsigned int blks_per_folio = i_blocks_per_folio(inode, folio);
+	unsigned int first_bit = (off >> inode->i_blkbits) + blks_per_folio;
+	unsigned int last_bit = (off + len - 1) >> inode->i_blkbits;
+	unsigned int nr_bits = last_bit - first_bit + 1;
 	unsigned long flags;
 
-	ifs_calc_range(folio, off, len, IOMAP_ST_DIRTY, &first_blk, &nr_blks);
 	spin_lock_irqsave(&ifs->state_lock, flags);
-	bitmap_clear(ifs->state, first_blk, nr_blks);
+	bitmap_clear(ifs->state, first_bit, nr_bits);
 	spin_unlock_irqrestore(&ifs->state_lock, flags);
 }
 
@@ -134,12 +114,15 @@ static void iomap_clear_range_dirty(struct folio *folio, size_t off, size_t len)
 static void ifs_set_range_dirty(struct folio *folio,
 		struct iomap_folio_state *ifs, size_t off, size_t len)
 {
-	unsigned int first_blk, nr_blks;
+	struct inode *inode = folio->mapping->host;
+	unsigned int blks_per_folio = i_blocks_per_folio(inode, folio);
+	unsigned int first_bit = (off >> inode->i_blkbits) + blks_per_folio;
+	unsigned int last_bit = (off + len - 1) >> inode->i_blkbits;
+	unsigned int nr_bits = last_bit - first_bit + 1;
 	unsigned long flags;
 
-	ifs_calc_range(folio, off, len, IOMAP_ST_DIRTY, &first_blk, &nr_blks);
 	spin_lock_irqsave(&ifs->state_lock, flags);
-	bitmap_set(ifs->state, first_blk, nr_blks);
+	bitmap_set(ifs->state, first_bit, nr_bits);
 	spin_unlock_irqrestore(&ifs->state_lock, flags);
 }
 
@@ -173,7 +156,7 @@ static struct iomap_folio_state *ifs_alloc(struct inode *inode,
 	 * second tracks per-block dirty state.
 	 */
 	ifs = kzalloc(struct_size(ifs, state,
-		      BITS_TO_LONGS(IOMAP_ST_MAX * nr_blocks)), gfp);
+		      BITS_TO_LONGS(2 * nr_blocks)), gfp);
 	if (!ifs)
 		return ifs;
 
