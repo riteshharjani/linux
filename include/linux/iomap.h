@@ -164,6 +164,7 @@ int iomap_is_partially_uptodate(struct page *page, unsigned long from,
 int iomap_releasepage(struct page *page, gfp_t gfp_mask);
 void iomap_invalidatepage(struct page *page, unsigned int offset,
 		unsigned int len);
+int iomap_dirty_page(struct page *page);
 #ifdef CONFIG_MIGRATION
 int iomap_migrate_page(struct address_space *mapping, struct page *newpage,
 		struct page *page, enum migrate_mode mode);
