@@ -974,7 +974,19 @@ static void ext4_mb_choose_next_group_goal_fast(struct ext4_allocation_context *
 		*group = grp->bb_group;
 		ac->ac_flags |= EXT4_MB_CR_GOAL_LEN_FAST_OPTIMIZED;
 	} else {
-		*new_cr = CR_BEST_AVAIL_LEN;
+		/*
+		 * CR_BEST_AVAIL_LEN works based on the concept that we have
+		 * a larger normalized goal len request which can be trimmed to
+		 * a smaller goal len such that it can still satisfy original
+		 * request len. However, allocation request for non-regular
+		 * files never gets normalized.
+		 * See function ext4_mb_normalize_request() (EXT4_MB_HINT_DATA).
+		 */
+		if ((ac->ac_flags & EXT4_MB_HINT_DATA))
+			*new_cr = CR_BEST_AVAIL_LEN;
+		else
+			*new_cr = CR_GOAL_LEN_SLOW;
+
 	}
 }
 
