@@ -1871,9 +1871,13 @@ static int mpage_submit_folio(struct mpage_da_data *mpd, struct folio *folio)
 	 */
 	size = i_size_read(mpd->inode);
 	len = folio_size(folio);
+
+	if (folio_pos(folio) >= size && !ext4_verity_in_progress(mpd->inode))
+		return 0;
+
 	if (folio_pos(folio) + len > size &&
 	    !ext4_verity_in_progress(mpd->inode))
-		len = size & ~PAGE_MASK;
+		len = size & (len - 1);
 	err = ext4_bio_write_folio(&mpd->io_submit, folio, len);
 	if (!err)
 		mpd->wbc->nr_to_write--;
@@ -2338,11 +2342,15 @@ static int mpage_journal_page_buffers(handle_t *handle,
 	size_t len = folio_size(folio);
 
 	folio_clear_checked(folio);
+
+	if (folio_pos(folio) >= size && !ext4_verity_in_progress(inode))
+		return 0;
+
 	mpd->wbc->nr_to_write--;
 
 	if (folio_pos(folio) + len > size &&
 	    !ext4_verity_in_progress(inode))
-		len = size - folio_pos(folio);
+		len = size & (len - 1);
 
 	return ext4_journal_folio_buffers(handle, folio, len);
 }
