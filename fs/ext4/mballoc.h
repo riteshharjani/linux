@@ -233,6 +233,19 @@ static inline ext4_fsblk_t ext4_grp_offs_to_block(struct super_block *sb,
 		(fex->fe_start << EXT4_SB(sb)->s_cluster_bits);
 }
 
+static inline loff_t fex_end(struct ext4_sb_info *sbi,
+			     struct ext4_free_extent *fex, ext4_grpblk_t *fe_len)
+{
+	return (loff_t)fex->fe_logical +
+		EXT4_C2B(sbi, fe_len ? *fe_len : fex->fe_len);
+}
+
+static inline loff_t pa_end(struct ext4_sb_info *sbi,
+			    struct ext4_prealloc_space *pa)
+{
+	return (loff_t)pa->pa_lstart + EXT4_C2B(sbi, pa->pa_len);
+}
+
 typedef int (*ext4_mballoc_query_range_fn)(
 	struct super_block		*sb,
 	ext4_group_t			agno,
