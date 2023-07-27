@@ -382,6 +382,7 @@ struct flex_groups {
 #define EXT4_BG_INODE_UNINIT	0x0001 /* Inode table/bitmap not in use */
 #define EXT4_BG_BLOCK_UNINIT	0x0002 /* Block bitmap not in use */
 #define EXT4_BG_INODE_ZEROED	0x0004 /* On-disk itable initialized to zero */
+#define EXT4_BG_IOPS		0x0010 /* In IOPS/fast storage */
 
 /*
  * Macro-instructions used to manage group descriptors
@@ -1112,6 +1113,8 @@ struct ext4_inode_info {
 #define EXT2_FLAGS_UNSIGNED_HASH	0x0002  /* Unsigned dirhash in use */
 #define EXT2_FLAGS_TEST_FILESYS		0x0004	/* to test development code */
 
+#define EXT2_FLAGS_HAS_IOPS		0x0080	/* has IOPS storage */
+
 /*
  * Mount flags set via mount options or defaults
  */
@@ -1514,8 +1517,12 @@ struct ext4_sb_info {
 	atomic_t s_retry_alloc_pending;
 	struct list_head *s_mb_avg_fragment_size;
 	rwlock_t *s_mb_avg_fragment_size_locks;
+	struct list_head *s_avg_fragment_size_list_iops;  /* avg_frament_size for IOPS groups */
+	rwlock_t *s_avg_fragment_size_locks_iops;
 	struct list_head *s_mb_largest_free_orders;
 	rwlock_t *s_mb_largest_free_orders_locks;
+	struct list_head *s_largest_free_orders_list_iops; /* largest_free_orders for IOPS grps */
+	rwlock_t *s_largest_free_orders_locks_iops;
 
 	/* tunables */
 	unsigned long s_stripe;
@@ -3366,6 +3373,7 @@ struct ext4_group_info {
 #define EXT4_GROUP_INFO_IBITMAP_CORRUPT		\
 	(1 << EXT4_GROUP_INFO_IBITMAP_CORRUPT_BIT)
 #define EXT4_GROUP_INFO_BBITMAP_READ_BIT	4
+#define EXT4_GROUP_INFO_IOPS_BIT		5
 
 #define EXT4_MB_GRP_NEED_INIT(grp)	\
 	(test_bit(EXT4_GROUP_INFO_NEED_INIT_BIT, &((grp)->bb_state)))
@@ -3382,6 +3390,10 @@ struct ext4_group_info {
 	(clear_bit(EXT4_GROUP_INFO_WAS_TRIMMED_BIT, &((grp)->bb_state)))
 #define EXT4_MB_GRP_TEST_AND_SET_READ(grp)	\
 	(test_and_set_bit(EXT4_GROUP_INFO_BBITMAP_READ_BIT, &((grp)->bb_state)))
+#define EXT4_MB_GRP_TEST_IOPS(grp)	\
+	(test_bit(EXT4_GROUP_INFO_IOPS_BIT, &((grp)->bb_state)))
+#define EXT4_MB_GRP_SET_IOPS(grp)	\
+	(set_bit(EXT4_GROUP_INFO_IOPS_BIT, &((grp)->bb_state)))
 
 #define EXT4_MAX_CONTENTION		8
 #define EXT4_CONTENTION_THRESHOLD	2

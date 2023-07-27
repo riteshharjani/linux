@@ -737,7 +737,7 @@ ext4_fsblk_t ext4_new_meta_blocks(handle_t *handle, struct inode *inode,
 	ar.inode = inode;
 	ar.goal = goal;
 	ar.len = count ? *count : 1;
-	ar.flags = flags;
+	ar.flags = flags | EXT4_MB_HINT_METADATA;
 
 	ret = ext4_mb_new_blocks(handle, &ar, errp);
 	if (count)

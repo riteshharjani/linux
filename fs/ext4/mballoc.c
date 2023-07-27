@@ -828,6 +828,8 @@ static void
 mb_update_avg_fragment_size(struct super_block *sb, struct ext4_group_info *grp)
 {
 	struct ext4_sb_info *sbi = EXT4_SB(sb);
+	rwlock_t *afs_locks;
+	struct list_head *afs_list;
 	int new_order;
 
 	if (!test_opt2(sb, MB_OPTIMIZE_SCAN) || grp->bb_free == 0)
@@ -838,20 +840,23 @@ mb_update_avg_fragment_size(struct super_block *sb, struct ext4_group_info *grp)
 	if (new_order == grp->bb_avg_fragment_size_order)
 		return;
 
+	if (EXT4_MB_GRP_TEST_IOPS(grp)) {
+		afs_locks = sbi->s_avg_fragment_size_locks_iops;
+		afs_list = sbi->s_avg_fragment_size_list_iops;
+	} else {
+		afs_locks = sbi->s_mb_avg_fragment_size_locks;
+		afs_list = sbi->s_mb_avg_fragment_size;
+	}
+
 	if (grp->bb_avg_fragment_size_order != -1) {
-		write_lock(&sbi->s_mb_avg_fragment_size_locks[
-					grp->bb_avg_fragment_size_order]);
+		write_lock(&afs_locks[grp->bb_avg_fragment_size_order]);
 		list_del(&grp->bb_avg_fragment_size_node);
-		write_unlock(&sbi->s_mb_avg_fragment_size_locks[
-					grp->bb_avg_fragment_size_order]);
+		write_unlock(&afs_locks[grp->bb_avg_fragment_size_order]);
 	}
 	grp->bb_avg_fragment_size_order = new_order;
-	write_lock(&sbi->s_mb_avg_fragment_size_locks[
-					grp->bb_avg_fragment_size_order]);
-	list_add_tail(&grp->bb_avg_fragment_size_node,
-		&sbi->s_mb_avg_fragment_size[grp->bb_avg_fragment_size_order]);
-	write_unlock(&sbi->s_mb_avg_fragment_size_locks[
-					grp->bb_avg_fragment_size_order]);
+	write_lock(&afs_locks[new_order]);
+	list_add_tail(&grp->bb_avg_fragment_size_node, &afs_list[new_order]);
+	write_unlock(&afs_locks[new_order]);
 }
 
 /*
@@ -863,6 +868,10 @@ static void ext4_mb_choose_next_group_cr0(struct ext4_allocation_context *ac,
 {
 	struct ext4_sb_info *sbi = EXT4_SB(ac->ac_sb);
 	struct ext4_group_info *iter, *grp;
+	bool iops = ac->ac_flags & EXT4_MB_HINT_METADATA &&
+		    ac->ac_sb->s_flags & EXT2_FLAGS_HAS_IOPS;
+	rwlock_t *lfo_locks;
+	struct list_head *lfo_list;
 	int i;
 
 	if (ac->ac_status == AC_STATUS_FOUND)
@@ -871,17 +880,25 @@ static void ext4_mb_choose_next_group_cr0(struct ext4_allocation_context *ac,
 	if (unlikely(sbi->s_mb_stats && ac->ac_flags & EXT4_MB_CR0_OPTIMIZED))
 		atomic_inc(&sbi->s_bal_cr0_bad_suggestions);
 
+	if (iops) {
+		lfo_locks = sbi->s_largest_free_orders_locks_iops;
+		lfo_list = sbi->s_largest_free_orders_list_iops;
+	} else {
+		lfo_locks = sbi->s_mb_largest_free_orders_locks;
+		lfo_list = sbi->s_mb_largest_free_orders;
+	}
+
 	grp = NULL;
 	for (i = ac->ac_2order; i < MB_NUM_ORDERS(ac->ac_sb); i++) {
-		if (list_empty(&sbi->s_mb_largest_free_orders[i]))
+		if (list_empty(&lfo_list[i]))
 			continue;
-		read_lock(&sbi->s_mb_largest_free_orders_locks[i]);
-		if (list_empty(&sbi->s_mb_largest_free_orders[i])) {
-			read_unlock(&sbi->s_mb_largest_free_orders_locks[i]);
+		read_lock(&lfo_locks[i]);
+		if (list_empty(&lfo_list[i])) {
+			read_unlock(&lfo_locks[i]);
 			continue;
 		}
 		grp = NULL;
-		list_for_each_entry(iter, &sbi->s_mb_largest_free_orders[i],
+		list_for_each_entry(iter, &lfo_list[i],
 				    bb_largest_free_order_node) {
 			if (sbi->s_mb_stats)
 				atomic64_inc(&sbi->s_bal_cX_groups_considered[0]);
@@ -890,7 +907,7 @@ static void ext4_mb_choose_next_group_cr0(struct ext4_allocation_context *ac,
 				break;
 			}
 		}
-		read_unlock(&sbi->s_mb_largest_free_orders_locks[i]);
+		read_unlock(&lfo_locks[i]);
 		if (grp)
 			break;
 	}
@@ -913,6 +930,10 @@ static void ext4_mb_choose_next_group_cr1(struct ext4_allocation_context *ac,
 {
 	struct ext4_sb_info *sbi = EXT4_SB(ac->ac_sb);
 	struct ext4_group_info *grp = NULL, *iter;
+	bool iops = ac->ac_flags & EXT4_MB_HINT_METADATA &&
+		    ac->ac_sb->s_flags & EXT2_FLAGS_HAS_IOPS;
+	rwlock_t *afs_locks;
+	struct list_head *afs_list;
 	int i;
 
 	if (unlikely(ac->ac_flags & EXT4_MB_CR1_OPTIMIZED)) {
@@ -920,16 +941,24 @@ static void ext4_mb_choose_next_group_cr1(struct ext4_allocation_context *ac,
 			atomic_inc(&sbi->s_bal_cr1_bad_suggestions);
 	}
 
+	if (iops) {
+		afs_locks = sbi->s_avg_fragment_size_locks_iops;
+		afs_list = sbi->s_avg_fragment_size_list_iops;
+	} else {
+		afs_locks = sbi->s_mb_avg_fragment_size_locks;
+		afs_list = sbi->s_mb_avg_fragment_size;
+	}
+
 	for (i = mb_avg_fragment_size_order(ac->ac_sb, ac->ac_g_ex.fe_len);
 	     i < MB_NUM_ORDERS(ac->ac_sb); i++) {
-		if (list_empty(&sbi->s_mb_avg_fragment_size[i]))
+		if (list_empty(&afs_list[i]))
 			continue;
-		read_lock(&sbi->s_mb_avg_fragment_size_locks[i]);
-		if (list_empty(&sbi->s_mb_avg_fragment_size[i])) {
-			read_unlock(&sbi->s_mb_avg_fragment_size_locks[i]);
+		read_lock(&afs_locks[i]);
+		if (list_empty(&afs_list[i])) {
+			read_unlock(&afs_locks[i]);
 			continue;
 		}
-		list_for_each_entry(iter, &sbi->s_mb_avg_fragment_size[i],
+		list_for_each_entry(iter, &afs_list[i],
 				    bb_avg_fragment_size_node) {
 			if (sbi->s_mb_stats)
 				atomic64_inc(&sbi->s_bal_cX_groups_considered[1]);
@@ -938,7 +967,7 @@ static void ext4_mb_choose_next_group_cr1(struct ext4_allocation_context *ac,
 				break;
 			}
 		}
-		read_unlock(&sbi->s_mb_avg_fragment_size_locks[i]);
+		read_unlock(&afs_locks[i]);
 		if (grp)
 			break;
 	}
@@ -947,7 +976,15 @@ static void ext4_mb_choose_next_group_cr1(struct ext4_allocation_context *ac,
 		*group = grp->bb_group;
 		ac->ac_flags |= EXT4_MB_CR1_OPTIMIZED;
 	} else {
-		*new_cr = 2;
+		if (iops) {
+			/* cannot find proper group in IOPS storage,
+			 * fall back to cr0 for non-IOPS groups.
+			 */
+			ac->ac_flags &= ~EXT4_MB_HINT_METADATA;
+			*new_cr = 0;
+		} else {
+			*new_cr = 2;
+		}
 	}
 }
 
@@ -1030,6 +1067,8 @@ static void
 mb_set_largest_free_order(struct super_block *sb, struct ext4_group_info *grp)
 {
 	struct ext4_sb_info *sbi = EXT4_SB(sb);
+	rwlock_t *lfo_locks;
+	struct list_head *lfo_list;
 	int i;
 
 	for (i = MB_NUM_ORDERS(sb) - 1; i >= 0; i--)
@@ -1042,21 +1081,24 @@ mb_set_largest_free_order(struct super_block *sb, struct ext4_group_info *grp)
 		return;
 	}
 
+	if (EXT4_MB_GRP_TEST_IOPS(grp)) {
+		lfo_locks = sbi->s_largest_free_orders_locks_iops;
+		lfo_list = sbi->s_largest_free_orders_list_iops;
+	} else {
+		lfo_locks = sbi->s_mb_largest_free_orders_locks;
+		lfo_list = sbi->s_mb_largest_free_orders;
+	}
+
 	if (grp->bb_largest_free_order >= 0) {
-		write_lock(&sbi->s_mb_largest_free_orders_locks[
-					      grp->bb_largest_free_order]);
+		write_lock(&lfo_locks[grp->bb_largest_free_order]);
 		list_del_init(&grp->bb_largest_free_order_node);
-		write_unlock(&sbi->s_mb_largest_free_orders_locks[
-					      grp->bb_largest_free_order]);
+		write_unlock(&lfo_locks[grp->bb_largest_free_order]);
 	}
 	grp->bb_largest_free_order = i;
 	if (grp->bb_largest_free_order >= 0 && grp->bb_free) {
-		write_lock(&sbi->s_mb_largest_free_orders_locks[
-					      grp->bb_largest_free_order]);
-		list_add_tail(&grp->bb_largest_free_order_node,
-		      &sbi->s_mb_largest_free_orders[grp->bb_largest_free_order]);
-		write_unlock(&sbi->s_mb_largest_free_orders_locks[
-					      grp->bb_largest_free_order]);
+		write_lock(&lfo_locks[i]);
+		list_add_tail(&grp->bb_largest_free_order_node, &lfo_list[i]);
+		write_unlock(&lfo_locks[i]);
 	}
 }
 
@@ -3150,6 +3192,8 @@ int ext4_mb_add_groupinfo(struct super_block *sb, ext4_group_t group,
 	INIT_LIST_HEAD(&meta_group_info[i]->bb_prealloc_list);
 	init_rwsem(&meta_group_info[i]->alloc_sem);
 	meta_group_info[i]->bb_free_root = RB_ROOT;
+	if (desc->bg_flags & EXT4_BG_IOPS)
+		EXT4_MB_GRP_SET_IOPS(meta_group_info[i]);
 	INIT_LIST_HEAD(&meta_group_info[i]->bb_largest_free_order_node);
 	INIT_LIST_HEAD(&meta_group_info[i]->bb_avg_fragment_size_node);
 	meta_group_info[i]->bb_largest_free_order = -1;  /* uninit */
@@ -3423,6 +3467,24 @@ int ext4_mb_init(struct super_block *sb)
 		INIT_LIST_HEAD(&sbi->s_mb_avg_fragment_size[i]);
 		rwlock_init(&sbi->s_mb_avg_fragment_size_locks[i]);
 	}
+	sbi->s_avg_fragment_size_list_iops =
+		kmalloc_array(MB_NUM_ORDERS(sb), sizeof(struct list_head),
+			      GFP_KERNEL);
+	if (!sbi->s_avg_fragment_size_list_iops) {
+		ret = -ENOMEM;
+		goto out;
+	}
+	sbi->s_avg_fragment_size_locks_iops =
+		kmalloc_array(MB_NUM_ORDERS(sb), sizeof(rwlock_t),
+			      GFP_KERNEL);
+	if (!sbi->s_avg_fragment_size_locks_iops) {
+		ret = -ENOMEM;
+		goto out;
+	}
+	for (i = 0; i < MB_NUM_ORDERS(sb); i++) {
+		INIT_LIST_HEAD(&sbi->s_avg_fragment_size_list_iops[i]);
+		rwlock_init(&sbi->s_avg_fragment_size_locks_iops[i]);
+	}
 	sbi->s_mb_largest_free_orders =
 		kmalloc_array(MB_NUM_ORDERS(sb), sizeof(struct list_head),
 			GFP_KERNEL);
@@ -3440,6 +3502,24 @@ int ext4_mb_init(struct super_block *sb)
 	for (i = 0; i < MB_NUM_ORDERS(sb); i++) {
 		INIT_LIST_HEAD(&sbi->s_mb_largest_free_orders[i]);
 		rwlock_init(&sbi->s_mb_largest_free_orders_locks[i]);
+	}
+	sbi->s_largest_free_orders_list_iops =
+		kmalloc_array(MB_NUM_ORDERS(sb), sizeof(struct list_head),
+			      GFP_KERNEL);
+	if (!sbi->s_largest_free_orders_list_iops) {
+		ret = -ENOMEM;
+		goto out;
+	}
+	sbi->s_largest_free_orders_locks_iops =
+		kmalloc_array(MB_NUM_ORDERS(sb), sizeof(rwlock_t),
+			      GFP_KERNEL);
+	if (!sbi->s_largest_free_orders_locks_iops) {
+		ret = -ENOMEM;
+		goto out;
+	}
+	for (i = 0; i < MB_NUM_ORDERS(sb); i++) {
+		INIT_LIST_HEAD(&sbi->s_largest_free_orders_list_iops[i]);
+		rwlock_init(&sbi->s_largest_free_orders_locks_iops[i]);
 	}
 
 	spin_lock_init(&sbi->s_md_lock);
@@ -3512,8 +3592,12 @@ out_free_locality_groups:
 out:
 	kfree(sbi->s_mb_avg_fragment_size);
 	kfree(sbi->s_mb_avg_fragment_size_locks);
+	kfree(sbi->s_avg_fragment_size_list_iops);
+	kfree(sbi->s_avg_fragment_size_locks_iops);
 	kfree(sbi->s_mb_largest_free_orders);
 	kfree(sbi->s_mb_largest_free_orders_locks);
+	kfree(sbi->s_largest_free_orders_list_iops);
+	kfree(sbi->s_largest_free_orders_locks_iops);
 	kfree(sbi->s_mb_offsets);
 	sbi->s_mb_offsets = NULL;
 	kfree(sbi->s_mb_maxs);
@@ -3582,8 +3666,12 @@ int ext4_mb_release(struct super_block *sb)
 	}
 	kfree(sbi->s_mb_avg_fragment_size);
 	kfree(sbi->s_mb_avg_fragment_size_locks);
+	kfree(sbi->s_avg_fragment_size_list_iops);
+	kfree(sbi->s_avg_fragment_size_locks_iops);
 	kfree(sbi->s_mb_largest_free_orders);
 	kfree(sbi->s_mb_largest_free_orders_locks);
+	kfree(sbi->s_largest_free_orders_list_iops);
+	kfree(sbi->s_largest_free_orders_locks_iops);
 	kfree(sbi->s_mb_offsets);
 	kfree(sbi->s_mb_maxs);
 	iput(sbi->s_buddy_cache);
