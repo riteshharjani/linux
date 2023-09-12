@@ -4272,11 +4272,12 @@ int ext4_ext_map_blocks(handle_t *handle, struct inode *inode,
 	ar.len = EXT4_NUM_B2C(sbi, offset+allocated);
 	ar.goal -= offset;
 	ar.logical -= offset;
-	if (S_ISREG(inode->i_mode))
+	if (S_ISREG(inode->i_mode) &&
+	    !(EXT4_I(inode)->i_flags & EXT4_EA_INODE_FL))
 		ar.flags = EXT4_MB_HINT_DATA;
 	else
 		/* disable in-core preallocation for non-regular files */
-		ar.flags = 0;
+		ar.flags = EXT4_MB_HINT_METADATA;
 	if (flags & EXT4_GET_BLOCKS_NO_NORMALIZE)
 		ar.flags |= EXT4_MB_HINT_NOPREALLOC;
 	if (flags & EXT4_GET_BLOCKS_DELALLOC_RESERVE)

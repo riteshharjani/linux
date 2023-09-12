@@ -610,8 +610,11 @@ int ext4_ind_map_blocks(handle_t *handle, struct inode *inode,
 	memset(&ar, 0, sizeof(ar));
 	ar.inode = inode;
 	ar.logical = map->m_lblk;
-	if (S_ISREG(inode->i_mode))
+	if (S_ISREG(inode->i_mode) &&
+	    !(EXT4_I(inode)->i_flags & EXT4_EA_INODE_FL))
 		ar.flags = EXT4_MB_HINT_DATA;
+	else
+		ar.flags = EXT4_MB_HINT_METADATA;
 	if (flags & EXT4_GET_BLOCKS_DELALLOC_RESERVE)
 		ar.flags |= EXT4_MB_DELALLOC_RESERVED;
 	if (flags & EXT4_GET_BLOCKS_METADATA_NOFAIL)
