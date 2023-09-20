@@ -612,6 +612,44 @@ int ext2_delete_entry(struct ext2_dir_entry_2 *dir, struct page *page)
 	return ext2_handle_dirsync(inode);
 }
 
+int ext2_make_empty_new(struct inode *inode, struct inode *parent)
+{
+	struct buffer_head *bh;
+	struct ext2_dir_entry_2 *de;
+	unsigned long blocksize = inode->i_sb->s_blocksize;
+
+	bh = ext2_bread(inode, 0, true);
+	if (IS_ERR_OR_NULL(bh))
+		return -ENOMEM;
+
+	de = (struct ext2_dir_entry_2 *) bh->b_data;
+	de->name_len = 1;
+	de->rec_len = ext2_rec_len_to_disk(EXT2_DIR_REC_LEN(1));
+	memcpy (de->name, ".\0\0", 4);
+	de->inode = cpu_to_le32(inode->i_ino);
+	ext2_set_de_type (de, inode);
+
+	de = (struct ext2_dir_entry_2 *)((void*)de + EXT2_DIR_REC_LEN(1));
+	de->name_len = 2;
+	de->rec_len = ext2_rec_len_to_disk(blocksize - EXT2_DIR_REC_LEN(1));
+	de->inode = cpu_to_le32(parent->i_ino);
+	memcpy (de->name, "..\0", 4);
+	ext2_set_de_type (de, inode);
+
+	/* all of below is required to make sure
+	 * 1. we uptodate this new dir created i_size.
+	 * 2. markt he inode as dirty since we have updated the inode i_size
+	 * 3. then we make sure that the bh (new dir 0th block), is synced
+	 * 4. then we call sync_inode_metadata() which will write this inode.
+	 */
+	i_size_write(inode, inode->i_sb->s_blocksize);
+	mark_inode_dirty(inode);
+	sync_dirty_buffer(bh);
+	sync_inode_metadata(inode, 1);
+	unlock_buffer(bh);
+	return 0;
+}
+
 /*
  * Set the first fragment of directory.
  */
