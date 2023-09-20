@@ -752,6 +752,7 @@ extern int ext2_getattr (struct mnt_idmap *, const struct path *,
 extern void ext2_set_inode_flags(struct inode *inode);
 extern int ext2_fiemap(struct inode *inode, struct fiemap_extent_info *fieinfo,
 		       u64 start, u64 len);
+struct buffer_head *ext2_bread(struct inode *inode, sector_t iblock, bool create);
 
 /* ioctl.c */
 extern int ext2_fileattr_get(struct dentry *dentry, struct fileattr *fa);

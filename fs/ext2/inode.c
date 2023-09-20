@@ -803,6 +803,62 @@ int ext2_get_block(struct inode *inode, sector_t iblock,
 
 }
 
+static int ext2_read_bh(struct buffer_head *bh, blk_opf_t op_flags,
+			 bh_end_io_t *end_io)
+{
+	BUG_ON(!buffer_locked(bh));
+	if (buffer_uptodate(bh))
+		return 0;
+	bh->b_end_io = end_io ? end_io : end_buffer_read_sync;
+	get_bh(bh);
+	submit_bh(REQ_OP_READ | op_flags, bh);
+	wait_on_buffer(bh);
+	if (buffer_uptodate(bh))
+		return 0;
+	return -EIO;
+}
+
+int ext2_read_bh_lock(struct buffer_head *bh, blk_opf_t op_flags, bool wait)
+{
+	lock_buffer(bh);
+	return ext2_read_bh(bh, op_flags, NULL);
+}
+
+struct buffer_head *ext2_bread(struct inode *inode, sector_t iblock, bool create)
+{
+	struct buffer_head map_bh;
+	struct buffer_head *bh = NULL;
+	int ret;
+
+	map_bh.b_state = 0;
+	map_bh.b_size = inode->i_sb->s_blocksize;
+	ret = ext2_get_block(inode, iblock, &map_bh, create);
+	if (ret <= 0)
+		return ERR_PTR(ret);
+
+	BUG_ON(!buffer_mapped(&map_bh));
+
+	/*
+	 * Is this required? I am putting this change now to zero out a newly
+	 * allocated buffer and marking it uptodate to skip reading it from disk
+	 */
+	if (buffer_new(&map_bh)) {
+		memset(map_bh.b_data, 0, map_bh.b_size);
+		set_buffer_uptodate(&map_bh);
+	}
+
+	bh = sb_getblk(inode->i_sb, map_bh.b_blocknr);
+	if (unlikely(!bh))
+		return ERR_PTR(-ENOMEM);
+
+	ret = ext2_read_bh_lock(bh, REQ_META | REQ_PRIO, true);
+	if (ret) {
+		put_bh(bh);
+		return ERR_PTR(ret);
+	}
+	return bh;
+}
+
 static int ext2_iomap_begin(struct inode *inode, loff_t offset, loff_t length,
 		unsigned flags, struct iomap *iomap, struct iomap *srcmap)
 {
