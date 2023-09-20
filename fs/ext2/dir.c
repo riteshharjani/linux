@@ -612,7 +612,7 @@ int ext2_delete_entry(struct ext2_dir_entry_2 *dir, struct page *page)
 	return ext2_handle_dirsync(inode);
 }
 
-int ext2_make_empty_new(struct inode *inode, struct inode *parent)
+int ext2_make_empty(struct inode *inode, struct inode *parent)
 {
 	struct buffer_head *bh;
 	struct ext2_dir_entry_2 *de;
@@ -653,7 +653,7 @@ int ext2_make_empty_new(struct inode *inode, struct inode *parent)
 /*
  * Set the first fragment of directory.
  */
-int ext2_make_empty(struct inode *inode, struct inode *parent)
+int ext2_make_empty_old(struct inode *inode, struct inode *parent)
 {
 	struct page *page = grab_cache_page(inode->i_mapping, 0);
 	unsigned chunk_size = ext2_chunk_size(inode);
