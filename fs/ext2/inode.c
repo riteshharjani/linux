@@ -807,8 +807,10 @@ static int ext2_read_bh(struct buffer_head *bh, blk_opf_t op_flags,
 			 bh_end_io_t *end_io)
 {
 	BUG_ON(!buffer_locked(bh));
-	if (buffer_uptodate(bh))
+	if (buffer_uptodate(bh)) {
+		unlock_buffer(bh);
 		return 0;
+	}
 	bh->b_end_io = end_io ? end_io : end_buffer_read_sync;
 	get_bh(bh);
 	submit_bh(REQ_OP_READ | op_flags, bh);
@@ -833,7 +835,7 @@ struct buffer_head *ext2_bread(struct inode *inode, sector_t iblock, bool create
 	map_bh.b_state = 0;
 	map_bh.b_size = inode->i_sb->s_blocksize;
 	ret = ext2_get_block(inode, iblock, &map_bh, create);
-	if (ret <= 0)
+	if (ret < 0)
 		return ERR_PTR(ret);
 
 	BUG_ON(!buffer_mapped(&map_bh));

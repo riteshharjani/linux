@@ -646,7 +646,7 @@ int ext2_make_empty(struct inode *inode, struct inode *parent)
 	mark_inode_dirty(inode);
 	sync_dirty_buffer(bh);
 	sync_inode_metadata(inode, 1);
-	unlock_buffer(bh);
+	brelse(bh);
 	return 0;
 }
 
