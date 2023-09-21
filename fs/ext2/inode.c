@@ -840,18 +840,19 @@ struct buffer_head *ext2_bread(struct inode *inode, sector_t iblock, bool create
 
 	BUG_ON(!buffer_mapped(&map_bh));
 
+	bh = sb_getblk(inode->i_sb, map_bh.b_blocknr);
+	if (unlikely(!bh))
+		return ERR_PTR(-ENOMEM);
+
 	/*
 	 * Is this required? I am putting this change now to zero out a newly
 	 * allocated buffer and marking it uptodate to skip reading it from disk
 	 */
 	if (buffer_new(&map_bh)) {
-		memset(map_bh.b_data, 0, map_bh.b_size);
-		set_buffer_uptodate(&map_bh);
+		memset(bh->b_data, 0, bh->b_size);
+		set_buffer_uptodate(bh);
+		return bh;
 	}
-
-	bh = sb_getblk(inode->i_sb, map_bh.b_blocknr);
-	if (unlikely(!bh))
-		return ERR_PTR(-ENOMEM);
 
 	ret = ext2_read_bh_lock(bh, REQ_META | REQ_PRIO, true);
 	if (ret) {

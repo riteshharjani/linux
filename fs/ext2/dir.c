@@ -644,6 +644,7 @@ int ext2_make_empty(struct inode *inode, struct inode *parent)
 	 */
 	i_size_write(inode, inode->i_sb->s_blocksize);
 	mark_inode_dirty(inode);
+	mark_buffer_dirty(bh);
 	sync_dirty_buffer(bh);
 	sync_inode_metadata(inode, 1);
 	brelse(bh);
