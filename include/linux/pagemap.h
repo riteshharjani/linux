@@ -1463,6 +1463,13 @@ static inline unsigned long dir_pages(struct inode *inode)
 			       PAGE_SHIFT;
 }
 
+static inline unsigned long dir_blocks(struct inode *inode)
+{
+
+	return ((unsigned long long)(i_size_read(inode) + inode->i_sb->s_blocksize - 1)) >>
+				inode->i_sb->s_blocksize_bits;
+}
+
 /**
  * folio_mkwrite_check_truncate - check if folio was truncated
  * @folio: the folio to check

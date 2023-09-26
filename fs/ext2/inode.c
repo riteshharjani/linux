@@ -851,6 +851,11 @@ struct buffer_head *ext2_bread(struct inode *inode, sector_t iblock, bool create
 	if (buffer_new(&map_bh)) {
 		memset(bh->b_data, 0, bh->b_size);
 		set_buffer_uptodate(bh);
+		/*
+		 * Adding a bug_on because I don't think we should have
+		 * a buffer_new flag set when create passed is 0.
+		 */
+		BUG_ON(create == 0);
 		return bh;
 	}
 

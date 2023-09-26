@@ -474,10 +474,80 @@ int ext2_set_link(struct inode *dir, struct ext2_dir_entry_2 *de,
 	return ext2_handle_dirsync(dir);
 }
 
+int ext2_add_link(struct dentry *dentry, struct inode *inode)
+{
+	struct inode *dir = d_inode(dentry->d_parent);
+	const char *name = dentry->d_name.name;
+	int namelen = dentry->d_name.len;
+	unsigned reclen = EXT2_DIR_REC_LEN(namelen);
+	unsigned chunksize = ext2_chunk_size(dir);
+	unsigned de_reclen, de_namelen;
+	struct buffer_head *bh;
+	ext2_dirent *de;
+	unsigned long nblocks = dir_blocks(dir);
+	unsigned long i;
+	int ret;
+
+	/* First try to search within the given blocks */
+	for (i = 0; i < nblocks; i++) {
+		bh = ext2_bread(dir, i, 0);
+		BUG_ON(!bh);
+		char *kaddr = bh->b_data;
+		char *dir_end;
+
+		if (IS_ERR(kaddr))
+			return PTR_ERR(kaddr);
+		dir_end = kaddr + ext2_last_byte(dir, i);
+		de = (ext2_dirent *)kaddr;
+		kaddr += chunksize - reclen;
+		while ((char *)de <= kaddr) {
+			BUG_ON((char*) de == dir_end);
+			BUG_ON(de->rec_len == 0);
+			ret = -EEXIST;
+			if (ext2_match(namelen, name, de))
+				goto out;
+			de_namelen = EXT2_DIR_REC_LEN(de->name_len);
+			de_reclen = ext2_rec_len_from_disk(de->rec_len);
+			if (!de->inode && de_reclen >= reclen)
+				goto got_it;
+			if (de_reclen >= de_namelen + reclen)
+				goto got_it;
+			de = (ext2_dirent *)((char*) de + de_reclen);
+		}
+		brelse(bh);
+	}
+	BUG();
+	return -EINVAL;
+
+got_it:
+	if (de->inode) {
+		ext2_dirent *de1 = (ext2_dirent *)((char*) de + de_namelen);
+		de1->rec_len = ext2_rec_len_to_disk(de_reclen - de_namelen);
+		de->rec_len = ext2_rec_len_to_disk(de_namelen);
+		de = de1;
+	}
+	de->name_len = namelen;
+	memcpy(de->name, name, namelen);
+	de->inode = cpu_to_le32(inode->i_ino);
+	ext2_set_de_type(de, inode);
+	// i_size_write not done since we didn't allocate a new block anyways
+	dir->i_mtime = inode_set_ctime_current(dir);
+	EXT2_I(dir)->i_flags &= ~EXT2_BTREE_FL;
+	mark_inode_dirty(dir);
+	mark_buffer_dirty(bh);
+	ret = sync_dirty_buffer(bh);
+	BUG_ON(ret);
+	ret = sync_inode_metadata(dir, 1);
+	BUG_ON(ret);
+out:
+	brelse(bh);
+	return ret;
+}
+
 /*
  *	Parent is locked.
  */
-int ext2_add_link (struct dentry *dentry, struct inode *inode)
+int ext2_add_link_old(struct dentry *dentry, struct inode *inode)
 {
 	struct inode *dir = d_inode(dentry->d_parent);
 	const char *name = dentry->d_name.name;
