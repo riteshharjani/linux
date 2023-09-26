@@ -20,12 +20,6 @@
 extern struct kmem_cache *f2fs_cf_name_slab;
 #endif
 
-static unsigned long dir_blocks(struct inode *inode)
-{
-	return ((unsigned long long) (i_size_read(inode) + PAGE_SIZE - 1))
-							>> PAGE_SHIFT;
-}
-
 static unsigned int dir_buckets(unsigned int level, int dir_level)
 {
 	if (level + dir_level < MAX_DIR_HASH_DEPTH / 2)
@@ -361,7 +355,7 @@ struct f2fs_dir_entry *__f2fs_find_entry(struct inode *dir,
 					 const struct f2fs_filename *fname,
 					 struct page **res_page)
 {
-	unsigned long npages = dir_blocks(dir);
+	unsigned long npages = dir_pages(dir);
 	struct f2fs_dir_entry *de = NULL;
 	unsigned int max_depth;
 	unsigned int level;
@@ -932,7 +926,7 @@ bool f2fs_empty_dir(struct inode *dir)
 	struct page *dentry_page;
 	unsigned int bit_pos;
 	struct f2fs_dentry_block *dentry_blk;
-	unsigned long nblock = dir_blocks(dir);
+	unsigned long nblock = dir_pages(dir);
 
 	if (f2fs_has_inline_dentry(dir))
 		return f2fs_empty_inline_dir(dir);
@@ -1057,7 +1051,7 @@ out:
 static int f2fs_readdir(struct file *file, struct dir_context *ctx)
 {
 	struct inode *inode = file_inode(file);
-	unsigned long npages = dir_blocks(inode);
+	unsigned long npages = dir_pages(inode);
 	struct f2fs_dentry_block *dentry_blk = NULL;
 	struct page *dentry_page = NULL;
 	struct file_ra_state *ra = &file->f_ra;
