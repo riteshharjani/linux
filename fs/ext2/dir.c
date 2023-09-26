@@ -562,6 +562,40 @@ got_it:
 	/* OFFSET_CACHE */
 out_put:
 	ext2_put_page(page, de);
+
+	/* hack function to check the return value of ext2_get_page() beyond
+	 * i_size.
+	 */
+	char *t_kaddr = ext2_get_page(dir, npages, 0, &page);
+	if (IS_ERR_OR_NULL(t_kaddr)) {
+		pr_crit("%s: ext2_get_page returned err or null for %lu %ld dir_blocks=%lu\n",
+			__func__, npages, PTR_ERR(t_kaddr), dir_blocks(dir));
+	} else {
+		pr_crit("%s: read ext2_get_page() for %lu dir_blocks=%lu\n",
+			__func__, npages, dir_blocks(dir));
+		ext2_put_page(page, t_kaddr);
+	}
+
+	t_kaddr = ext2_get_page(dir, npages+1, 0, &page);
+	if (IS_ERR_OR_NULL(t_kaddr)) {
+		pr_crit("%s: ext2_get_page returned err or null for %lu %ld dir_blocks=%lu\n",
+			__func__, npages, PTR_ERR(t_kaddr), dir_blocks(dir));
+	} else {
+		pr_crit("%s: read ext2_get_page() for %lu dir_blocks=%lu\n",
+			__func__, npages, dir_blocks(dir));
+		ext2_put_page(page, t_kaddr);
+	}
+
+	t_kaddr = ext2_get_page(dir, npages+10, 0, &page);
+	if (IS_ERR_OR_NULL(t_kaddr)) {
+		pr_crit("%s: ext2_get_page returned err or null for %lu %ld dir_blocks=%lu\n",
+			__func__, npages, PTR_ERR(t_kaddr), dir_blocks(dir));
+	} else {
+		pr_crit("%s: read ext2_get_page() for %lu dir_blocks=%lu\n",
+			__func__, npages, dir_blocks(dir));
+		ext2_put_page(page, t_kaddr);
+	}
+
 	return err;
 out_unlock:
 	unlock_page(page);
