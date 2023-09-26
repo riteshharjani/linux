@@ -253,8 +253,57 @@ static inline void ext2_set_de_type(ext2_dirent *de, struct inode *inode)
 		de->file_type = 0;
 }
 
+static int ext2_readdir(struct file *file, struct dir_context *ctx)
+{
+	loff_t pos = ctx->pos;
+	struct inode *inode = file_inode(file);
+	unsigned long nblocks = dir_blocks(inode);
+	unsigned long i = pos >> inode->i_sb->s_blocksize_bits;
+	unsigned long chunksize = ext2_chunk_size(inode);
+	unsigned long offset = pos & (chunksize - 1);
+	bool has_filetype;
+
+	if (pos > i_size_read(inode) - EXT2_DIR_REC_LEN(1))
+		return 0;
+
+	has_filetype =
+		EXT2_HAS_INCOMPAT_FEATURE(inode->i_sb,
+					  EXT2_FEATURE_INCOMPAT_FILETYPE);
+
+	for (; i < nblocks; i++, offset = 0) {
+		ext2_dirent *de;
+		struct buffer_head *bh;
+		char *kaddr;
+		char *limit;
+
+		bh = ext2_bread(inode, i, 0);
+		BUG_ON(!bh);
+		kaddr = bh->b_data;
+
+		de = (ext2_dirent *)(kaddr + offset);
+		limit = kaddr + ext2_last_byte(inode, i) - EXT2_DIR_REC_LEN(1);
+		while ((char*)de <= limit) {
+			BUG_ON(de->rec_len == 0);
+			if (de->inode) {
+				unsigned char d_type = DT_UNKNOWN;
+				if (has_filetype)
+					d_type = fs_ftype_to_dtype(de->file_type);
+				if (!dir_emit(ctx, de->name, de->name_len,
+					      le32_to_cpu(de->inode), d_type)) {
+					brelse(bh);
+					return 0;
+				}
+			}
+			ctx->pos += ext2_rec_len_from_disk(de->rec_len);
+			de = ext2_next_entry(de);
+		}
+		brelse(bh);
+	}
+	return 0;
+}
+
 static int
-ext2_readdir(struct file *file, struct dir_context *ctx)
+ext2_readdir_old(struct file *file, struct dir_context *ctx)
 {
 	loff_t pos = ctx->pos;
 	struct inode *inode = file_inode(file);
