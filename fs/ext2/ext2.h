@@ -11,6 +11,7 @@
  *
  *  Copyright (C) 1991, 1992  Linus Torvalds
  */
+#include "linux/buffer_head.h"
 #include <linux/fs.h>
 #include <linux/ext2_fs.h>
 #include <linux/blockgroup_lock.h>
@@ -233,7 +234,7 @@ struct ext2_group_desc
 #define EXT2_COMPRBLK_FL		FS_COMPRBLK_FL	/* One or more compressed clusters */
 #define EXT2_NOCOMP_FL			FS_NOCOMP_FL	/* Don't compress */
 #define EXT2_ECOMPR_FL			FS_ECOMPR_FL	/* Compression error */
-/* End compression flags --- maybe not all used */	
+/* End compression flags --- maybe not all used */
 #define EXT2_BTREE_FL			FS_BTREE_FL	/* btree format dir */
 #define EXT2_INDEX_FL			FS_INDEX_FL	/* hash-indexed directory */
 #define EXT2_IMAGIC_FL			FS_IMAGIC_FL	/* AFS directory */
@@ -440,7 +441,7 @@ struct ext2_super_block {
 	 * the incompatible feature set is that if there is a bit set
 	 * in the incompatible feature set that the kernel doesn't
 	 * know about, it should refuse to mount the filesystem.
-	 * 
+	 *
 	 * e2fsck's requirements are more strict; if it doesn't know
 	 * about a feature in either the compatible or incompatible
 	 * feature set, it must abort and not try to meddle with
@@ -566,7 +567,7 @@ struct ext2_super_block {
 #define EXT2_DEFM_ACL		0x0008
 #define EXT2_DEFM_UID16		0x0010
     /* Not used by ext2, but reserved for use by ext3 */
-#define EXT3_DEFM_JMODE		0x0060 
+#define EXT3_DEFM_JMODE		0x0060
 #define EXT3_DEFM_JMODE_DATA	0x0020
 #define EXT3_DEFM_JMODE_ORDERED	0x0040
 #define EXT3_DEFM_JMODE_WBACK	0x0060
@@ -722,12 +723,12 @@ extern int ext2_inode_by_name(struct inode *dir,
 			      const struct qstr *child, ino_t *ino);
 extern int ext2_make_empty(struct inode *, struct inode *);
 extern struct ext2_dir_entry_2 *ext2_find_entry(struct inode *, const struct qstr *,
-						struct page **);
-extern int ext2_delete_entry(struct ext2_dir_entry_2 *dir, struct page *page);
+						struct buffer_head **);
+extern int ext2_delete_entry(struct inode *dir, struct ext2_dir_entry_2 *de, struct buffer_head *bh);
 extern int ext2_empty_dir (struct inode *);
-extern struct ext2_dir_entry_2 *ext2_dotdot(struct inode *dir, struct page **p);
+extern struct ext2_dir_entry_2 *ext2_dotdot(struct inode *dir, struct buffer_head **bh);
 int ext2_set_link(struct inode *dir, struct ext2_dir_entry_2 *de,
-		struct page *page, struct inode *inode, bool update_times);
+		struct buffer_head *bh, struct inode *inode, bool update_times);
 static inline void ext2_put_page(struct page *page, void *page_addr)
 {
 	kunmap_local(page_addr);

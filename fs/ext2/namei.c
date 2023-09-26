@@ -33,6 +33,7 @@
 
 #include <linux/pagemap.h>
 #include <linux/quotaops.h>
+#include <linux/buffer_head.h>
 #include "ext2.h"
 #include "xattr.h"
 #include "acl.h"
@@ -58,7 +59,7 @@ static struct dentry *ext2_lookup(struct inode * dir, struct dentry *dentry, uns
 	struct inode * inode;
 	ino_t ino;
 	int res;
-	
+
 	if (dentry->d_name.len > EXT2_NAME_LEN)
 		return ERR_PTR(-ENAMETOOLONG);
 
@@ -89,7 +90,7 @@ struct dentry *ext2_get_parent(struct dentry *child)
 		return ERR_PTR(res);
 
 	return d_obtain_alias(ext2_iget(child->d_sb, ino));
-} 
+}
 
 /*
  * By the time this is called, we already have created
@@ -97,7 +98,7 @@ struct dentry *ext2_get_parent(struct dentry *child)
  * is so far negative - it has no inode.
  *
  * If the create succeeds, we fill in the inode information
- * with d_instantiate(). 
+ * with d_instantiate().
  */
 static int ext2_create (struct mnt_idmap * idmap,
 			struct inode * dir, struct dentry * dentry,
@@ -273,6 +274,36 @@ static int ext2_unlink(struct inode *dir, struct dentry *dentry)
 {
 	struct inode *inode = d_inode(dentry);
 	struct ext2_dir_entry_2 *de;
+	struct buffer_head *bh;
+	int err;
+
+	err = dquot_initialize(dir);
+	if (err)
+		goto out;
+
+	de = ext2_find_entry(dir, &dentry->d_name, &bh);
+	if (IS_ERR(de)) {
+		err = PTR_ERR(de);
+		goto out;
+	}
+
+	err = ext2_delete_entry(dir, de, bh);
+	brelse(bh);
+	if (err)
+		goto out;
+
+	inode_set_ctime_to_ts(inode, inode_get_ctime(dir));
+	inode_dec_link_count(inode);
+	err = 0;
+out:
+	return err;
+}
+
+/*
+static int ext2_unlink_old(struct inode *dir, struct dentry *dentry)
+{
+	struct inode *inode = d_inode(dentry);
+	struct ext2_dir_entry_2 *de;
 	struct page *page;
 	int err;
 
@@ -297,7 +328,7 @@ static int ext2_unlink(struct inode *dir, struct dentry *dentry)
 out:
 	return err;
 }
-
+*/
 static int ext2_rmdir (struct inode * dir, struct dentry *dentry)
 {
 	struct inode * inode = d_inode(dentry);
@@ -321,9 +352,9 @@ static int ext2_rename (struct mnt_idmap * idmap,
 {
 	struct inode * old_inode = d_inode(old_dentry);
 	struct inode * new_inode = d_inode(new_dentry);
-	struct page * dir_page = NULL;
+	struct buffer_head * dir_bh = NULL;
 	struct ext2_dir_entry_2 * dir_de = NULL;
-	struct page * old_page;
+	struct buffer_head * old_bh;
 	struct ext2_dir_entry_2 * old_de;
 	int err;
 
@@ -338,19 +369,20 @@ static int ext2_rename (struct mnt_idmap * idmap,
 	if (err)
 		return err;
 
-	old_de = ext2_find_entry(old_dir, &old_dentry->d_name, &old_page);
+//	old_de = ext2_find_entry(old_dir, &old_dentry->d_name, &old_page);
+	old_de = ext2_find_entry(old_dir, &old_dentry->d_name, &old_bh);
 	if (IS_ERR(old_de))
 		return PTR_ERR(old_de);
 
 	if (S_ISDIR(old_inode->i_mode)) {
 		err = -EIO;
-		dir_de = ext2_dotdot(old_inode, &dir_page);
+		dir_de = ext2_dotdot(old_inode, &dir_bh);
 		if (!dir_de)
 			goto out_old;
 	}
 
 	if (new_inode) {
-		struct page *new_page;
+		struct buffer_head *new_bh;
 		struct ext2_dir_entry_2 *new_de;
 
 		err = -ENOTEMPTY;
@@ -358,13 +390,13 @@ static int ext2_rename (struct mnt_idmap * idmap,
 			goto out_dir;
 
 		new_de = ext2_find_entry(new_dir, &new_dentry->d_name,
-					 &new_page);
+					 &new_bh);
 		if (IS_ERR(new_de)) {
 			err = PTR_ERR(new_de);
 			goto out_dir;
 		}
-		err = ext2_set_link(new_dir, new_de, new_page, old_inode, true);
-		ext2_put_page(new_page, new_de);
+		err = ext2_set_link(new_dir, new_de, new_bh, old_inode, true);
+		brelse(new_bh);
 		if (err)
 			goto out_dir;
 		inode_set_ctime_current(new_inode);
@@ -386,19 +418,19 @@ static int ext2_rename (struct mnt_idmap * idmap,
 	inode_set_ctime_current(old_inode);
 	mark_inode_dirty(old_inode);
 
-	err = ext2_delete_entry(old_de, old_page);
+	err = ext2_delete_entry(old_dir, old_de, old_bh);
 	if (!err && dir_de) {
 		if (old_dir != new_dir)
-			err = ext2_set_link(old_inode, dir_de, dir_page,
+			err = ext2_set_link(old_inode, dir_de, dir_bh,
 					    new_dir, false);
 
 		inode_dec_link_count(old_dir);
 	}
 out_dir:
 	if (dir_de)
-		ext2_put_page(dir_page, dir_de);
+		brelse(dir_bh);
 out_old:
-	ext2_put_page(old_page, old_de);
+	brelse(old_bh);
 	return err;
 }
 
