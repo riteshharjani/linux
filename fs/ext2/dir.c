@@ -107,7 +107,7 @@ static bool ext2_check_page(struct page *page, int quiet, char *kaddr)
 	ext2_dirent *p;
 	char *error;
 
-	if ((dir->i_size >> PAGE_SHIFT) == page->index) {
+	if (((dir->i_size - 1) >> PAGE_SHIFT) == page->index) {
 		limit = dir->i_size & ~PAGE_MASK;
 		if (limit & (chunk_size - 1))
 			goto Ebadsize;
