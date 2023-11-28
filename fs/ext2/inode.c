@@ -406,6 +406,8 @@ static int ext2_alloc_blocks(struct inode *inode,
 	ext2_fsblk_t current_block = 0;
 	int ret = 0;
 
+	ext2_inc_ib_seq(EXT2_I(inode));
+
 	/*
 	 * Here we try to allocate the requested multiple blocks at once,
 	 * on a best-effort basis.
@@ -966,14 +968,53 @@ ext2_writepages(struct address_space *mapping, struct writeback_control *wbc)
 	return mpage_writepages(mapping, wbc, ext2_get_block);
 }
 
+struct ext2_writepage_ctx {
+	struct iomap_writepage_ctx ctx;
+	unsigned int		ib_seq;
+};
+
+static inline
+struct ext2_writepage_ctx *EXT2_WPC(struct iomap_writepage_ctx *ctx)
+{
+	return container_of(ctx, struct ext2_writepage_ctx, ctx);
+}
+
+static bool ext2_imap_valid(struct iomap_writepage_ctx *wpc, struct inode *inode,
+			    loff_t offset)
+{
+	if (offset < wpc->iomap.offset ||
+	    offset >= wpc->iomap.offset + wpc->iomap.length)
+		return false;
+
+	if (EXT2_WPC(wpc)->ib_seq != READ_ONCE(EXT2_I(inode)->ib_seq))
+		return false;
+
+	return true;
+}
+
 static int ext2_write_map_blocks(struct iomap_writepage_ctx *wpc,
 				 struct inode *inode, loff_t offset)
 {
-	if (offset >= wpc->iomap.offset &&
-	    offset < wpc->iomap.offset + wpc->iomap.length)
+	loff_t maxblocks = (loff_t)INT_MAX;
+	u8 blkbits = inode->i_blkbits;
+	u32 bno;
+	bool new, boundary;
+	int ret;
+
+	if (ext2_imap_valid(wpc, inode, offset))
 		return 0;
 
-	return ext2_iomap_begin(inode, offset, inode->i_sb->s_blocksize,
+	EXT2_WPC(wpc)->ib_seq = READ_ONCE(EXT2_I(inode)->ib_seq);
+
+	ret = ext2_get_blocks(inode, offset >> blkbits, maxblocks << blkbits,
+			      &bno, &new, &boundary, 0);
+	if (ret < 0)
+		return ret;
+	/*
+	 * ret can be 0 in case of a hole which is possible for mmaped writes.
+	 */
+	ret = ret ? ret : 1;
+	return ext2_iomap_begin(inode, offset, (loff_t)ret << blkbits,
 				IOMAP_WRITE, &wpc->iomap, NULL);
 }
 
@@ -984,9 +1025,9 @@ static const struct iomap_writeback_ops ext2_writeback_ops = {
 static int ext2_file_writepages(struct address_space *mapping,
 				struct writeback_control *wbc)
 {
-	struct iomap_writepage_ctx wpc = { };
+	struct ext2_writepage_ctx wpc = { };
 
-	return iomap_writepages(mapping, wbc, &wpc, &ext2_writeback_ops);
+	return iomap_writepages(mapping, wbc, &wpc.ctx, &ext2_writeback_ops);
 }
 
 static int
