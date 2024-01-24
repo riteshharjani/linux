@@ -108,18 +108,42 @@ void blk_queue_bounce_limit(struct request_queue *q, enum blk_bounce bounce)
 }
 EXPORT_SYMBOL(blk_queue_bounce_limit);
 
+
+/*
+ * Returns max guaranteed sectors which we can fit in a bio. For convenience of
+ * users, rounddown_pow_of_two() the return value.
+ *
+ * We always assume that we can fit in at least PAGE_SIZE in a segment, apart
+ * from first and last segments.
+ */
+static unsigned int blk_queue_max_guaranteed_bio_sectors(
+					struct queue_limits *limits,
+					struct request_queue *q)
+{
+	unsigned int max_segments = min(BIO_MAX_VECS, limits->max_segments);
+	unsigned int length;
+
+	length = min(max_segments, 2) * queue_logical_block_size(q);
+	if (max_segments > 2)
+		length += (max_segments - 2) * PAGE_SIZE;
+
+	return rounddown_pow_of_two(length >> SECTOR_SHIFT);
+}
+
 static void blk_atomic_writes_update_limits(struct request_queue *q)
 {
 	struct queue_limits *limits = &q->limits;
 	unsigned int max_hw_sectors =
 		rounddown_pow_of_two(limits->max_hw_sectors);
+	unsigned int unit_limit = min(max_hw_sectors,
+		blk_queue_max_guaranteed_bio_sectors(limits, q));
 
 	limits->atomic_write_max_sectors =
 		min(limits->atomic_write_hw_max_sectors, max_hw_sectors);
 	limits->atomic_write_unit_min_sectors =
-		min(limits->atomic_write_hw_unit_min_sectors, max_hw_sectors);
+		min(limits->atomic_write_hw_unit_min_sectors, unit_limit);
 	limits->atomic_write_unit_max_sectors =
-		min(limits->atomic_write_hw_unit_max_sectors, max_hw_sectors);
+		min(limits->atomic_write_hw_unit_max_sectors, unit_limit);
 }
 
 /**
