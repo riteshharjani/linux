@@ -1956,6 +1956,44 @@ static void nvme_set_queue_limits(struct nvme_ctrl *ctrl,
 	blk_queue_write_cache(q, vwc, vwc);
 }
 
+static void nvme_update_atomic_write_disk_info(struct gendisk *disk,
+		struct nvme_ctrl *ctrl, struct nvme_id_ns *id, u32 bs, u32 atomic_bs)
+{
+	unsigned int unit_min = 0, unit_max = 0, boundary = 0, max_bytes = 0;
+	struct request_queue *q = disk->queue;
+
+	if (id->nsfeat & NVME_NS_FEAT_ATOMICS && id->nawupf) {
+		if (le16_to_cpu(id->nabspf))
+			boundary = (le16_to_cpu(id->nabspf) + 1) * bs;
+
+		/*
+		 * The boundary size just needs to be a multiple of unit_max
+		 * (and not necessarily a power-of-2), so this could be relaxed
+		 * in the block layer in future.
+		 * Furthermore, if needed, unit_max could be reduced so that the
+		 * boundary size was compliant - but don't support yet.
+		 */
+		if (!boundary || is_power_of_2(boundary)) {
+			max_bytes = atomic_bs;
+			unit_min = bs;
+			unit_max = rounddown_pow_of_two(atomic_bs);
+		} else {
+			dev_notice(ctrl->device, "Unsupported atomic write boundary (%d)\n",
+				boundary);
+			boundary = 0;
+		}
+	} else if (ctrl->subsys->awupf) {
+		max_bytes = atomic_bs;
+		unit_min = bs;
+		unit_max = rounddown_pow_of_two(atomic_bs);
+	}
+
+	blk_queue_atomic_write_max_bytes(q, max_bytes);
+	blk_queue_atomic_write_unit_min_sectors(q, unit_min >> SECTOR_SHIFT);
+	blk_queue_atomic_write_unit_max_sectors(q, unit_max >> SECTOR_SHIFT);
+	blk_queue_atomic_write_boundary_bytes(q, boundary);
+}
+
 static void nvme_update_disk_info(struct nvme_ctrl *ctrl, struct gendisk *disk,
 		struct nvme_ns_head *head, struct nvme_id_ns *id)
 {
@@ -1986,6 +2024,8 @@ static void nvme_update_disk_info(struct nvme_ctrl *ctrl, struct gendisk *disk,
 			atomic_bs = (1 + le16_to_cpu(id->nawupf)) * bs;
 		else
 			atomic_bs = (1 + ctrl->subsys->awupf) * bs;
+
+		nvme_update_atomic_write_disk_info(disk, ctrl, id, bs, atomic_bs);
 	}
 
 	if (id->nsfeat & NVME_NS_FEAT_IO_OPT) {
