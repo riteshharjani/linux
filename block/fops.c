@@ -41,6 +41,26 @@ static bool blkdev_dio_unaligned(struct block_device *bdev, loff_t pos,
 		!bdev_iter_is_aligned(bdev, iter);
 }
 
+static bool blkdev_atomic_write_valid(struct block_device *bdev, loff_t pos,
+				      struct iov_iter *iter)
+{
+	struct request_queue *q = bdev_get_queue(bdev);
+	unsigned int min_bytes = queue_atomic_write_unit_min_bytes(q);
+	unsigned int max_bytes = queue_atomic_write_unit_max_bytes(q);
+
+	if (!iter_is_ubuf(iter))
+		return false;
+	if (iov_iter_count(iter) & (min_bytes - 1))
+		return false;
+	if (!is_power_of_2(iov_iter_count(iter)))
+		return false;
+	if (pos & (iov_iter_count(iter) - 1))
+		return false;
+	if (iov_iter_count(iter) > max_bytes)
+		return false;
+	return true;
+}
+
 #define DIO_INLINE_BIO_VECS 4
 
 static ssize_t __blkdev_direct_IO_simple(struct kiocb *iocb,
@@ -48,12 +68,17 @@ static ssize_t __blkdev_direct_IO_simple(struct kiocb *iocb,
 {
 	struct block_device *bdev = I_BDEV(iocb->ki_filp->f_mapping->host);
 	struct bio_vec inline_vecs[DIO_INLINE_BIO_VECS], *vecs;
+	bool is_read = iov_iter_rw(iter) == READ;
+	bool atomic_write = (iocb->ki_flags & IOCB_ATOMIC) && !is_read;
 	loff_t pos = iocb->ki_pos;
 	bool should_dirty = false;
 	struct bio bio;
 	ssize_t ret;
 
 	if (blkdev_dio_unaligned(bdev, pos, iter))
+		return -EINVAL;
+
+	if (atomic_write && !blkdev_atomic_write_valid(bdev, pos, iter))
 		return -EINVAL;
 
 	if (nr_pages <= DIO_INLINE_BIO_VECS)
@@ -65,7 +90,7 @@ static ssize_t __blkdev_direct_IO_simple(struct kiocb *iocb,
 			return -ENOMEM;
 	}
 
-	if (iov_iter_rw(iter) == READ) {
+	if (is_read) {
 		bio_init(&bio, bdev, vecs, nr_pages, REQ_OP_READ);
 		if (user_backed_iter(iter))
 			should_dirty = true;
@@ -74,6 +99,8 @@ static ssize_t __blkdev_direct_IO_simple(struct kiocb *iocb,
 	}
 	bio.bi_iter.bi_sector = pos >> SECTOR_SHIFT;
 	bio.bi_ioprio = iocb->ki_ioprio;
+	if (atomic_write)
+		bio.bi_opf |= REQ_ATOMIC;
 
 	ret = bio_iov_iter_get_pages(&bio, iter);
 	if (unlikely(ret))
@@ -170,6 +197,9 @@ static ssize_t __blkdev_direct_IO(struct kiocb *iocb, struct iov_iter *iter,
 	blk_opf_t opf = is_read ? REQ_OP_READ : dio_bio_write_op(iocb);
 	loff_t pos = iocb->ki_pos;
 	int ret = 0;
+
+	if ((iocb->ki_flags & IOCB_ATOMIC) && !is_read)
+		return -EINVAL;
 
 	if (blkdev_dio_unaligned(bdev, pos, iter))
 		return -EINVAL;
@@ -305,12 +335,16 @@ static ssize_t __blkdev_direct_IO_async(struct kiocb *iocb,
 	struct block_device *bdev = I_BDEV(iocb->ki_filp->f_mapping->host);
 	bool is_read = iov_iter_rw(iter) == READ;
 	blk_opf_t opf = is_read ? REQ_OP_READ : dio_bio_write_op(iocb);
+	bool atomic_write = (iocb->ki_flags & IOCB_ATOMIC) && !is_read;
 	struct blkdev_dio *dio;
 	struct bio *bio;
 	loff_t pos = iocb->ki_pos;
 	int ret = 0;
 
 	if (blkdev_dio_unaligned(bdev, pos, iter))
+		return -EINVAL;
+
+	if (atomic_write && !blkdev_atomic_write_valid(bdev, pos, iter))
 		return -EINVAL;
 
 	if (iocb->ki_flags & IOCB_ALLOC_CACHE)
@@ -349,6 +383,9 @@ static ssize_t __blkdev_direct_IO_async(struct kiocb *iocb,
 	} else {
 		task_io_account_write(bio->bi_iter.bi_size);
 	}
+
+	if (atomic_write)
+		bio->bi_opf |= REQ_ATOMIC;
 
 	if (iocb->ki_flags & IOCB_NOWAIT)
 		bio->bi_opf |= REQ_NOWAIT;
@@ -619,6 +656,11 @@ static int blkdev_open(struct inode *inode, struct file *filp)
 
 	if (bdev_nowait(handle->bdev))
 		filp->f_mode |= FMODE_NOWAIT;
+
+	if (queue_atomic_write_unit_min_bytes(bdev_get_queue(handle->bdev)) &&
+	    (filp->f_flags & O_DIRECT)) {
+		filp->f_mode |= FMODE_CAN_ATOMIC_WRITE;
+	}
 
 	filp->f_mapping = handle->bdev->bd_inode->i_mapping;
 	filp->f_wb_err = filemap_sample_wb_err(filp->f_mapping);
