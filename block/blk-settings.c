@@ -59,6 +59,13 @@ void blk_set_default_limits(struct queue_limits *lim)
 	lim->zoned = false;
 	lim->zone_write_granularity = 0;
 	lim->dma_alignment = 511;
+	lim->atomic_write_hw_max_sectors = 0;
+	lim->atomic_write_max_sectors = 0;
+	lim->atomic_write_hw_boundary_sectors = 0;
+	lim->atomic_write_hw_unit_min_sectors = 0;
+	lim->atomic_write_unit_min_sectors = 0;
+	lim->atomic_write_hw_unit_max_sectors = 0;
+	lim->atomic_write_unit_max_sectors = 0;
 }
 
 /**
@@ -100,6 +107,20 @@ void blk_queue_bounce_limit(struct request_queue *q, enum blk_bounce bounce)
 	q->limits.bounce = bounce;
 }
 EXPORT_SYMBOL(blk_queue_bounce_limit);
+
+static void blk_atomic_writes_update_limits(struct request_queue *q)
+{
+	struct queue_limits *limits = &q->limits;
+	unsigned int max_hw_sectors =
+		rounddown_pow_of_two(limits->max_hw_sectors);
+
+	limits->atomic_write_max_sectors =
+		min(limits->atomic_write_hw_max_sectors, max_hw_sectors);
+	limits->atomic_write_unit_min_sectors =
+		min(limits->atomic_write_hw_unit_min_sectors, max_hw_sectors);
+	limits->atomic_write_unit_max_sectors =
+		min(limits->atomic_write_hw_unit_max_sectors, max_hw_sectors);
+}
 
 /**
  * blk_queue_max_hw_sectors - set max sectors for a request for this queue
@@ -145,6 +166,8 @@ void blk_queue_max_hw_sectors(struct request_queue *q, unsigned int max_hw_secto
 				 limits->logical_block_size >> SECTOR_SHIFT);
 	limits->max_sectors = max_sectors;
 
+	blk_atomic_writes_update_limits(q);
+
 	if (!q->disk)
 		return;
 	q->disk->bdi->io_pages = max_sectors >> (PAGE_SHIFT - 9);
@@ -181,6 +204,62 @@ void blk_queue_max_discard_sectors(struct request_queue *q,
 	q->limits.max_discard_sectors = max_discard_sectors;
 }
 EXPORT_SYMBOL(blk_queue_max_discard_sectors);
+
+/**
+ * blk_queue_atomic_write_max_bytes - set max bytes supported by
+ * the device for atomic write operations.
+ * @q:  the request queue for the device
+ * @bytes: maximum bytes supported
+ */
+void blk_queue_atomic_write_max_bytes(struct request_queue *q,
+				      unsigned int bytes)
+{
+	q->limits.atomic_write_hw_max_sectors = bytes >> SECTOR_SHIFT;
+	blk_atomic_writes_update_limits(q);
+}
+EXPORT_SYMBOL(blk_queue_atomic_write_max_bytes);
+
+/**
+ * blk_queue_atomic_write_boundary_bytes - Device's logical block address space
+ * which an atomic write should not cross.
+ * @q:  the request queue for the device
+ * @bytes: must be a power-of-two.
+ */
+void blk_queue_atomic_write_boundary_bytes(struct request_queue *q,
+					   unsigned int bytes)
+{
+	q->limits.atomic_write_hw_boundary_sectors = bytes >> SECTOR_SHIFT;
+}
+EXPORT_SYMBOL(blk_queue_atomic_write_boundary_bytes);
+
+/**
+ * blk_queue_atomic_write_unit_min_sectors - smallest unit that can be written
+ * atomically to the device.
+ * @q:  the request queue for the device
+ * @sectors: must be a power-of-two.
+ */
+void blk_queue_atomic_write_unit_min_sectors(struct request_queue *q,
+					     unsigned int sectors)
+{
+
+	q->limits.atomic_write_hw_unit_min_sectors = sectors;
+	blk_atomic_writes_update_limits(q);
+}
+EXPORT_SYMBOL(blk_queue_atomic_write_unit_min_sectors);
+
+/*
+ * blk_queue_atomic_write_unit_max_sectors - largest unit that can be written
+ * atomically to the device.
+ * @q: the request queue for the device
+ * @sectors: must be a power-of-two.
+ */
+void blk_queue_atomic_write_unit_max_sectors(struct request_queue *q,
+					     unsigned int sectors)
+{
+	q->limits.atomic_write_hw_unit_max_sectors = sectors;
+	blk_atomic_writes_update_limits(q);
+}
+EXPORT_SYMBOL(blk_queue_atomic_write_unit_max_sectors);
 
 /**
  * blk_queue_max_secure_erase_sectors - set max sectors for a secure erase
