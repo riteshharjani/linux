@@ -546,6 +546,44 @@ xfs_stat_blksize(
 	return PAGE_SIZE;
 }
 
+void xfs_get_atomic_write_attr(
+	struct xfs_inode *ip,
+	unsigned int *unit_min,
+	unsigned int *unit_max)
+{
+	xfs_extlen_t		extsz = xfs_get_extsz(ip);
+	struct xfs_buftarg	*target = xfs_inode_buftarg(ip);
+	struct block_device	*bdev = target->bt_bdev;
+	unsigned int		awu_min, awu_max, align;
+	struct request_queue	*q = bdev->bd_queue;
+	struct xfs_mount	*mp = ip->i_mount;
+
+	/*
+	 * Convert to multiples of the BLOCKSIZE (as we support a minimum
+	 * atomic write unit of BLOCKSIZE).
+	 */
+	awu_min = queue_atomic_write_unit_min_bytes(q);
+	awu_max = queue_atomic_write_unit_max_bytes(q);
+
+	awu_min &= ~mp->m_blockmask;
+	awu_max &= ~mp->m_blockmask;
+
+	align = XFS_FSB_TO_B(mp, extsz);
+
+	if (!awu_max || !xfs_inode_atomicwrites(ip) || !align ||
+	    !is_power_of_2(align)) {
+		*unit_min = 0;
+		*unit_max = 0;
+	} else {
+		if (awu_min)
+			*unit_min = min(awu_min, align);
+		else
+			*unit_min = mp->m_sb.sb_blocksize;
+
+		*unit_max = min(awu_max, align);
+	}
+}
+
 STATIC int
 xfs_vn_getattr(
 	struct mnt_idmap	*idmap,
@@ -618,6 +656,13 @@ xfs_vn_getattr(
 			stat->result_mask |= STATX_DIOALIGN;
 			stat->dio_mem_align = bdev_dma_alignment(bdev) + 1;
 			stat->dio_offset_align = bdev_logical_block_size(bdev);
+		}
+		if (request_mask & STATX_WRITE_ATOMIC) {
+			unsigned int unit_min, unit_max;
+
+			xfs_get_atomic_write_attr(ip, &unit_min, &unit_max);
+			generic_fill_statx_atomic_writes(stat,
+				unit_min, unit_max);
 		}
 		fallthrough;
 	default:
