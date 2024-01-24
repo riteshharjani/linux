@@ -18,6 +18,42 @@
 #include "blk-rq-qos.h"
 #include "blk-throttle.h"
 
+static bool rq_straddles_atomic_write_boundary(struct request *rq,
+					unsigned int front,
+					unsigned int back)
+{
+	unsigned int boundary = queue_atomic_write_boundary_bytes(rq->q);
+	unsigned int mask, imask;
+	loff_t start, end;
+
+	if (!boundary)
+		return false;
+
+	start = rq->__sector << SECTOR_SHIFT;
+	end = start + rq->__data_len;
+
+	start -= front;
+	end += back;
+
+	/* We're longer than the boundary, so must be crossing it */
+	if (end - start > boundary)
+		return true;
+
+	mask = boundary - 1;
+
+	/* start/end are boundary-aligned, so cannot be crossing */
+	if (!(start & mask) || !(end & mask))
+		return false;
+
+	imask = ~mask;
+
+	/* Top bits are different, so crossed a boundary */
+	if ((start & imask) != (end & imask))
+		return true;
+
+	return false;
+}
+
 static inline void bio_get_first_bvec(struct bio *bio, struct bio_vec *bv)
 {
 	*bv = mp_bvec_iter_bvec(bio->bi_io_vec, bio->bi_iter);
@@ -659,6 +695,13 @@ int ll_back_merge_fn(struct request *req, struct bio *bio, unsigned int nr_segs)
 		return 0;
 	}
 
+	if (req->cmd_flags & REQ_ATOMIC) {
+		if (rq_straddles_atomic_write_boundary(req,
+				0, bio->bi_iter.bi_size)) {
+			return 0;
+		}
+	}
+
 	return ll_new_hw_segment(req, bio, nr_segs);
 }
 
@@ -676,6 +719,13 @@ static int ll_front_merge_fn(struct request *req, struct bio *bio,
 	    blk_rq_get_max_sectors(req, bio->bi_iter.bi_sector)) {
 		req_set_nomerge(req->q, req);
 		return 0;
+	}
+
+	if (req->cmd_flags & REQ_ATOMIC) {
+		if (rq_straddles_atomic_write_boundary(req,
+				bio->bi_iter.bi_size, 0)) {
+			return 0;
+		}
 	}
 
 	return ll_new_hw_segment(req, bio, nr_segs);
@@ -713,6 +763,13 @@ static int ll_merge_requests_fn(struct request_queue *q, struct request *req,
 	if ((blk_rq_sectors(req) + blk_rq_sectors(next)) >
 	    blk_rq_get_max_sectors(req, blk_rq_pos(req)))
 		return 0;
+
+	if (req->cmd_flags & REQ_ATOMIC) {
+		if (rq_straddles_atomic_write_boundary(req,
+				0, blk_rq_bytes(next))) {
+			return 0;
+		}
+	}
 
 	total_phys_segments = req->nr_phys_segments + next->nr_phys_segments;
 	if (total_phys_segments > blk_rq_get_max_segments(req))
@@ -809,6 +866,18 @@ static enum elv_merge blk_try_req_merge(struct request *req,
 	return ELEVATOR_NO_MERGE;
 }
 
+static bool blk_atomic_write_mergeable_rq_bio(struct request *rq,
+					      struct bio *bio)
+{
+	return (rq->cmd_flags & REQ_ATOMIC) == (bio->bi_opf & REQ_ATOMIC);
+}
+
+static bool blk_atomic_write_mergeable_rqs(struct request *rq,
+					   struct request *next)
+{
+	return (rq->cmd_flags & REQ_ATOMIC) == (next->cmd_flags & REQ_ATOMIC);
+}
+
 /*
  * For non-mq, this has to be called with the request spinlock acquired.
  * For mq with scheduling, the appropriate queue wide lock should be held.
@@ -826,6 +895,9 @@ static struct request *attempt_merge(struct request_queue *q,
 		return NULL;
 
 	if (req->ioprio != next->ioprio)
+		return NULL;
+
+	if (!blk_atomic_write_mergeable_rqs(req, next))
 		return NULL;
 
 	/*
@@ -953,6 +1025,9 @@ bool blk_rq_merge_ok(struct request *rq, struct bio *bio)
 		return false;
 
 	if (rq->ioprio != bio_prio(bio))
+		return false;
+
+	if (blk_atomic_write_mergeable_rq_bio(rq, bio) == false)
 		return false;
 
 	return true;
