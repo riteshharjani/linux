@@ -949,6 +949,32 @@ static inline blk_status_t nvme_setup_rw(struct nvme_ns *ns,
 	if (req->cmd_flags & REQ_RAHEAD)
 		dsmgmt |= NVME_RW_DSM_FREQ_PREFETCH;
 
+	/*
+	 * Ensure that nothing has been sent which cannot be executed
+	 * atomically.
+	 */
+	if (req->cmd_flags & REQ_ATOMIC) {
+		struct nvme_ns_head *head = ns->head;
+		u32 boundary_bytes = head->atomic_boundary;
+
+		if (blk_rq_bytes(req) > ns->head->atomic_max)
+			return BLK_STS_IOERR;
+
+		if (boundary_bytes) {
+			u32 mask = boundary_bytes - 1, imask = ~mask;
+			u32 start = blk_rq_pos(req) << SECTOR_SHIFT;
+			u32 end = start + blk_rq_bytes(req);
+
+			if (blk_rq_bytes(req) > boundary_bytes)
+				return BLK_STS_IOERR;
+
+			if (((start & imask) != (end & imask)) &&
+			    (end & mask)) {
+				return BLK_STS_IOERR;
+			}
+		}
+	}
+
 	cmnd->rw.opcode = op;
 	cmnd->rw.flags = 0;
 	cmnd->rw.nsid = cpu_to_le32(ns->head->ns_id);
@@ -1957,7 +1983,8 @@ static void nvme_set_queue_limits(struct nvme_ctrl *ctrl,
 }
 
 static void nvme_update_atomic_write_disk_info(struct gendisk *disk,
-		struct nvme_ctrl *ctrl, struct nvme_id_ns *id, u32 bs, u32 atomic_bs)
+		struct nvme_ctrl *ctrl, struct nvme_ns_head *head,
+		struct nvme_id_ns *id, u32 bs, u32 atomic_bs)
 {
 	unsigned int unit_min = 0, unit_max = 0, boundary = 0, max_bytes = 0;
 	struct request_queue *q = disk->queue;
@@ -1987,6 +2014,9 @@ static void nvme_update_atomic_write_disk_info(struct gendisk *disk,
 		unit_min = bs;
 		unit_max = rounddown_pow_of_two(atomic_bs);
 	}
+
+	head->atomic_max = max_bytes;
+	head->atomic_boundary = boundary;
 
 	blk_queue_atomic_write_max_bytes(q, max_bytes);
 	blk_queue_atomic_write_unit_min_sectors(q, unit_min >> SECTOR_SHIFT);
@@ -2025,7 +2055,8 @@ static void nvme_update_disk_info(struct nvme_ctrl *ctrl, struct gendisk *disk,
 		else
 			atomic_bs = (1 + ctrl->subsys->awupf) * bs;
 
-		nvme_update_atomic_write_disk_info(disk, ctrl, id, bs, atomic_bs);
+		nvme_update_atomic_write_disk_info(disk, ctrl, head, id,
+						   bs, atomic_bs);
 	}
 
 	if (id->nsfeat & NVME_NS_FEAT_IO_OPT) {
