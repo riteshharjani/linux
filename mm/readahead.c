@@ -493,8 +493,11 @@ void page_cache_ra_order(struct readahead_control *ractl,
 	int err = 0;
 	gfp_t gfp = readahead_gfp_mask(mapping);
 
-	if (!mapping_large_folio_support(mapping) || ra->size < 4)
+	filemap_invalidate_lock_shared(mapping);
+	if (!mapping_large_folio_support(mapping) || ra->size < 4) {
+		filemap_invalidate_unlock_shared(mapping);
 		goto fallback;
+	}
 
 	limit = min(limit, index + ra->size - 1);
 
@@ -506,7 +509,6 @@ void page_cache_ra_order(struct readahead_control *ractl,
 			new_order--;
 	}
 
-	filemap_invalidate_lock_shared(mapping);
 	while (index <= limit) {
 		unsigned int order = new_order;
 
