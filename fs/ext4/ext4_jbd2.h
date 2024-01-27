@@ -499,6 +499,13 @@ static inline int ext4_free_data_revoke_credits(struct inode *inode, int blocks)
  */
 static inline int ext4_should_dioread_nolock(struct inode *inode)
 {
+	/*
+	 * Always enable dioread_nolock for inode which use buffered
+	 * iomap path.
+	 */
+	if (ext4_test_inode_state(inode, EXT4_STATE_BUFFERED_IOMAP))
+		return 1;
+
 	if (!test_opt(inode->i_sb, DIOREAD_NOLOCK))
 		return 0;
 	if (!S_ISREG(inode->i_mode))
