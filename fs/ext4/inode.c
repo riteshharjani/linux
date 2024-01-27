@@ -1742,7 +1742,11 @@ static int ext4_da_map_blocks(struct inode *inode, sector_t iblock,
 #ifdef ES_AGGRESSIVE_TEST
 		ext4_map_blocks_es_recheck(NULL, inode, map, &orig_map, 0);
 #endif
-		return retval;
+		if (ext4_es_is_delayed(&es) || ext4_es_is_written(&es))
+			return retval;
+
+		down_read(&EXT4_I(inode)->i_data_sem);
+		goto insert_extent;
 	}
 
 	/*
@@ -1770,9 +1774,11 @@ static int ext4_da_map_blocks(struct inode *inode, sector_t iblock,
 				     inode->i_ino, retval, map->m_len);
 			WARN_ON(1);
 		}
-
+insert_extent:
 		status = map->m_flags & EXT4_MAP_UNWRITTEN ?
 				EXTENT_STATUS_UNWRITTEN : EXTENT_STATUS_WRITTEN;
+		if (status == EXTENT_STATUS_UNWRITTEN)
+			status |= EXTENT_STATUS_DELAYED;
 		ext4_es_insert_extent(inode, map->m_lblk, map->m_len,
 				      map->m_pblk, status);
 		up_read(&EXT4_I(inode)->i_data_sem);
