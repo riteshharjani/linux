@@ -834,7 +834,6 @@ static int iomap_write_begin(struct iomap_iter *iter, loff_t pos,
 
 out_unlock:
 	__iomap_put_folio(iter, pos, 0, folio);
-	iomap_write_failed(iter->inode, pos, len);
 
 	return status;
 }
@@ -879,6 +878,25 @@ static size_t iomap_write_end_inline(const struct iomap_iter *iter,
 
 	mark_inode_dirty(iter->inode);
 	return copied;
+}
+
+static size_t iomap_write_end_simple(struct iomap_iter *iter, loff_t pos,
+		size_t len, struct folio *folio)
+{
+	const struct iomap *srcmap = iomap_iter_srcmap(iter);
+	size_t ret;
+
+	if (srcmap->type == IOMAP_INLINE) {
+		ret = iomap_write_end_inline(iter, folio, pos, len);
+	} else if (srcmap->flags & IOMAP_F_BUFFER_HEAD) {
+		ret = block_write_end(NULL, iter->inode->i_mapping, pos, len,
+				len, &folio->page, NULL);
+	} else {
+		ret = __iomap_write_end(iter->inode, pos, len, len, folio);
+	}
+
+	__iomap_put_folio(iter, pos, ret, folio);
+	return ret;
 }
 
 /* Returns the number of bytes copied.  May be 0.  Cannot be an errno. */
@@ -960,8 +978,10 @@ retry:
 		}
 
 		status = iomap_write_begin(iter, pos, bytes, &folio);
-		if (unlikely(status))
+		if (unlikely(status)) {
+			iomap_write_failed(iter->inode, pos, bytes);
 			break;
+		}
 		if (iter->iomap.flags & IOMAP_F_STALE)
 			break;
 
@@ -1343,7 +1363,7 @@ static loff_t iomap_unshare_iter(struct iomap_iter *iter)
 		if (bytes > folio_size(folio) - offset)
 			bytes = folio_size(folio) - offset;
 
-		bytes = iomap_write_end(iter, pos, bytes, bytes, folio);
+		bytes = iomap_write_end_simple(iter, pos, bytes, folio);
 		if (WARN_ON_ONCE(bytes == 0))
 			return -EIO;
 
@@ -1407,7 +1427,7 @@ static loff_t iomap_zero_iter(struct iomap_iter *iter, bool *did_zero)
 		folio_zero_range(folio, offset, bytes);
 		folio_mark_accessed(folio);
 
-		bytes = iomap_write_end(iter, pos, bytes, bytes, folio);
+		bytes = iomap_write_end_simple(iter, pos, bytes, folio);
 		if (WARN_ON_ONCE(bytes == 0))
 			return -EIO;
 
