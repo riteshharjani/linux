@@ -934,7 +934,6 @@ static inline blk_status_t nvme_setup_write_zeroes(struct nvme_ns *ns,
 	return BLK_STS_OK;
 }
 
-__maybe_unused
 static bool nvme_valid_atomic_write(struct request *req)
 {
 	struct request_queue *q = req->q;
@@ -973,6 +972,13 @@ static inline blk_status_t nvme_setup_rw(struct nvme_ns *ns,
 
 	if (req->cmd_flags & REQ_RAHEAD)
 		dsmgmt |= NVME_RW_DSM_FREQ_PREFETCH;
+
+	/*
+	 * Ensure that nothing has been sent which cannot be executed
+	 * atomically.
+	 */
+	if (req->cmd_flags & REQ_ATOMIC && !nvme_valid_atomic_write(req))
+		return BLK_STS_IOERR;
 
 	cmnd->rw.opcode = op;
 	cmnd->rw.flags = 0;
