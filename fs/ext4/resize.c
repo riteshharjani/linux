@@ -2033,9 +2033,6 @@ int ext4_resize_fs(struct super_block *sb, ext4_fsblk_t n_blocks_count)
 retry:
 	o_blocks_count = ext4_blocks_count(es);
 
-	ext4_msg(sb, KERN_INFO, "resizing filesystem from %llu "
-		 "to %llu blocks", o_blocks_count, n_blocks_count);
-
 	if (n_blocks_count < o_blocks_count) {
 		/* On-line shrinking not supported */
 		ext4_warning(sb, "can't shrink FS - resize aborted");
@@ -2057,6 +2054,13 @@ retry:
 	o_desc_blocks = num_desc_blocks(sb, sbi->s_groups_count);
 
 	meta_bg = ext4_has_feature_meta_bg(sb);
+
+	ext4_msg(sb, KERN_INFO, "resizing filesystem from %llu to %llu blocks, "
+		 "old_desc_blocks %lu to new_desc_blocks %lu, "
+		 "features: resize_inode(%d), meta_bg(%d)",
+		 o_blocks_count, n_blocks_count,
+		 o_desc_blocks, n_desc_blocks,
+		 ext4_has_feature_resize_inode(sb), meta_bg);
 
 	if (ext4_has_feature_resize_inode(sb)) {
 		if (meta_bg) {
@@ -2085,7 +2089,8 @@ retry:
 		}
 	}
 
-	if ((!resize_inode && !meta_bg) || n_blocks_count == o_blocks_count) {
+	if ((!resize_inode && !meta_bg && n_desc_blocks > o_desc_blocks)
+			|| n_blocks_count == o_blocks_count) {
 		err = ext4_convert_meta_bg(sb, resize_inode);
 		if (err)
 			goto out;
@@ -2186,7 +2191,11 @@ out:
 	if (err)
 		ext4_warning(sb, "error (%d) occurred during "
 			     "file system resize", err);
-	ext4_msg(sb, KERN_INFO, "resized filesystem to %llu",
-		 ext4_blocks_count(es));
+	ext4_msg(sb, KERN_INFO, "resized filesystem to %llu blocks, "
+		 "desc blocks %d, features: resize_inode(%d) meta_bg(%d)",
+		 ext4_blocks_count(es),
+		 num_desc_blocks(sb, sbi->s_groups_count),
+		 ext4_has_feature_resize_inode(sb),
+		 ext4_has_feature_meta_bg(sb));
 	return err;
 }
