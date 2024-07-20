@@ -331,9 +331,19 @@ static unsigned long linear_map_hash_count;
 static DEFINE_RAW_SPINLOCK(linear_map_hash_lock);
 static inline void hash_debug_pagealloc_alloc_slots(void)
 {
+	unsigned long max_hash_count = (ppc64_rma_size / 4) >> PAGE_SHIFT;
+
 	if (!debug_pagealloc_enabled())
 		return;
 	linear_map_hash_count = memblock_end_of_DRAM() >> PAGE_SHIFT;
+	if (unlikely(linear_map_hash_count > max_hash_count)) {
+		pr_info("linear map size (%llu) greater than 4 times RMA region (%llu). Disabling debug_pagealloc\n",
+			((u64)linear_map_hash_count << PAGE_SHIFT),
+			ppc64_rma_size);
+		linear_map_hash_count = 0;
+		return;
+	}
+
 	linear_map_hash_slots = memblock_alloc_try_nid(
 			linear_map_hash_count, 1, MEMBLOCK_LOW_LIMIT,
 			ppc64_rma_size,	NUMA_NO_NODE);
@@ -355,6 +365,9 @@ static int hash_debug_pagealloc_map_pages(struct page *page, int numpages,
 {
 	unsigned long flags, vaddr, lmi;
 	int i;
+
+	if (!debug_pagealloc_enabled() || !linear_map_hash_count)
+		return 0;
 
 	local_irq_save(flags);
 	for (i = 0; i < numpages; i++, page++) {
