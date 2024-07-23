@@ -412,6 +412,9 @@ static phys_addr_t kfence_pool;
 // TODO: Remove bug_ons?
 static inline void __init hash_kfence_alloc_pool(void)
 {
+	if (!kfence_early_init)
+		goto err;
+
 	// allocate kfence pool early
 	kfence_pool = memblock_phys_alloc_range(KFENCE_POOL_SIZE, PAGE_SIZE,
 				MEMBLOCK_LOW_LIMIT, MEMBLOCK_ALLOC_ANYWHERE);
@@ -1070,7 +1073,8 @@ static void __init htab_init_page_sizes(void)
 	bool aligned = true;
 	init_hpte_page_sizes();
 
-	if (!debug_pagealloc_enabled_or_kfence()) {
+	if (!debug_pagealloc_enabled() &&
+	    !(IS_ENABLED(CONFIG_KFENCE) && kfence_early_init)) {
 		/*
 		 * Pick a size for the linear mapping. Currently, we only
 		 * support 16M, 1M and 4K which is the default
