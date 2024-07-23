@@ -15,6 +15,8 @@
 #define ARCH_FUNC_PREFIX "."
 #endif
 
+extern bool kfence_early_init;
+
 #ifdef CONFIG_KFENCE
 extern bool kfence_disabled;
 
@@ -27,6 +29,16 @@ static inline bool arch_kfence_init_pool(void)
 {
 	return !kfence_disabled;
 }
+
+static inline int parse_kfence_early_init(char *arg)
+{
+	int val;
+
+	if (get_option(&arg, &val))
+		kfence_early_init = !!val;
+	return 0;
+}
+early_param("kfence.sample_interval", parse_kfence_early_init);
 #endif
 
 #ifdef CONFIG_PPC64
