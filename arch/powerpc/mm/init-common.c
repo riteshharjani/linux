@@ -44,7 +44,7 @@ static int __init parse_kfence_early_init(char *arg)
 }
 early_param("kfence.sample_interval", parse_kfence_early_init);
 #else
-bool __ro_after_init kfence_early_init = 0;
+bool __ro_after_init kfence_early_init;
 #endif
 
 static int __init parse_nosmep(char *p)
