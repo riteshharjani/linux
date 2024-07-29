@@ -333,7 +333,7 @@ static void kernel_unmap_linear_page(unsigned long vaddr, unsigned long idx,
 static u8 *linear_map_hash_slots;
 static unsigned long linear_map_hash_count;
 static DEFINE_RAW_SPINLOCK(linear_map_hash_lock);
-static void __init hash_debug_pagealloc_alloc_slots(void)
+static void hash_debug_pagealloc_alloc_slots(void)
 {
 	unsigned long max_hash_count = (ppc64_rma_size / 4) >> PAGE_SHIFT;
 
@@ -356,7 +356,7 @@ static void __init hash_debug_pagealloc_alloc_slots(void)
 		      __func__, linear_map_hash_count, &ppc64_rma_size);
 }
 
-static inline void __init hash_debug_pagealloc_add_slot(phys_addr_t paddr,
+static inline void hash_debug_pagealloc_add_slot(phys_addr_t paddr,
 							int slot)
 {
 	if (!debug_pagealloc_enabled() || !linear_map_hash_count)
@@ -408,7 +408,7 @@ static DEFINE_RAW_SPINLOCK(linear_map_kf_hash_lock);
 
 static phys_addr_t kfence_pool;
 
-static inline void __init hash_kfence_alloc_pool(void)
+static inline void hash_kfence_alloc_pool(void)
 {
 	if (!kfence_early_init)
 		goto err;
@@ -442,7 +442,7 @@ err:
 	disable_kfence();
 }
 
-static inline void __init hash_kfence_map_pool(void)
+static inline void hash_kfence_map_pool(void)
 {
 	unsigned long kfence_pool_start, kfence_pool_end;
 	unsigned long prot = pgprot_val(PAGE_KERNEL);
@@ -459,7 +459,7 @@ static inline void __init hash_kfence_map_pool(void)
 	memblock_clear_nomap(kfence_pool, KFENCE_POOL_SIZE);
 }
 
-static inline void __init hash_kfence_add_slot(phys_addr_t paddr, int slot)
+static inline void hash_kfence_add_slot(phys_addr_t paddr, int slot)
 {
 	unsigned long vaddr = (unsigned long) __va(paddr);
 	unsigned long lmi = (vaddr - (unsigned long)__kfence_pool)
@@ -521,7 +521,7 @@ int hash__kernel_map_pages(struct page *page, int numpages, int enable)
 		return hash_debug_pagealloc_map_pages(page, numpages, enable);
 }
 
-static void __init hash_linear_map_add_slot(phys_addr_t paddr, int slot)
+static void hash_linear_map_add_slot(phys_addr_t paddr, int slot)
 {
 	if (is_kfence_address(__va(paddr)))
 		hash_kfence_add_slot(paddr, slot);
