@@ -413,16 +413,6 @@ static inline void __init hash_kfence_alloc_pool(void)
 	if (!kfence_early_init)
 		goto err;
 
-	// allocate kfence pool early
-	kfence_pool = memblock_phys_alloc_range(KFENCE_POOL_SIZE, PAGE_SIZE,
-				MEMBLOCK_LOW_LIMIT, MEMBLOCK_ALLOC_ANYWHERE);
-	if (!kfence_pool) {
-		pr_err("%s: memblock for kfence pool (%lu) failed\n", __func__,
-				KFENCE_POOL_SIZE);
-		goto err;
-	}
-	memblock_mark_nomap(kfence_pool, KFENCE_POOL_SIZE);
-
 	// allocate linear map for kfence within RMA region
 	linear_map_kf_hash_count = KFENCE_POOL_SIZE >> PAGE_SHIFT;
 	linear_map_kf_hash_slots = memblock_alloc_try_nid(
@@ -431,9 +421,20 @@ static inline void __init hash_kfence_alloc_pool(void)
 	if (!linear_map_kf_hash_slots) {
 		pr_err("%s: memblock for linear map (%lu) failed\n", __func__,
 				linear_map_kf_hash_count);
-		memblock_phys_free(kfence_pool, KFENCE_POOL_SIZE);
 		goto err;
 	}
+
+	// allocate kfence pool early
+	kfence_pool = memblock_phys_alloc_range(KFENCE_POOL_SIZE, PAGE_SIZE,
+				MEMBLOCK_LOW_LIMIT, MEMBLOCK_ALLOC_ANYWHERE);
+	if (!kfence_pool) {
+		pr_err("%s: memblock for kfence pool (%lu) failed\n", __func__,
+				KFENCE_POOL_SIZE);
+		memblock_free(linear_map_kf_hash_slots, linear_map_kf_hash_count);
+		linear_map_kf_hash_count = 0;
+		goto err;
+	}
+	memblock_mark_nomap(kfence_pool, KFENCE_POOL_SIZE);
 
 	return;
 err:
