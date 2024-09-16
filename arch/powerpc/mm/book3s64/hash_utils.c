@@ -329,6 +329,16 @@ static void kernel_unmap_linear_page(unsigned long vaddr, unsigned long idx,
 }
 #endif
 
+static inline bool hash_supports_debug_pagealloc(void)
+{
+	unsigned long max_hash_count = (ppc64_rma_size / 4) >> PAGE_SHIFT;
+	unsigned long linear_map_count = memblock_end_of_DRAM() >> PAGE_SHIFT;
+
+	if (!debug_pagealloc_enabled() || linear_map_count > max_hash_count)
+		return false;
+	return true;
+}
+
 #ifdef CONFIG_DEBUG_PAGEALLOC
 static u8 *linear_map_hash_slots;
 static unsigned long linear_map_hash_count;
@@ -337,17 +347,10 @@ static void hash_debug_pagealloc_alloc_slots(void)
 {
 	unsigned long max_hash_count = (ppc64_rma_size / 4) >> PAGE_SHIFT;
 
-	if (!debug_pagealloc_enabled())
+	if (!hash_supports_debug_pagealloc())
 		return;
-	linear_map_hash_count = memblock_end_of_DRAM() >> PAGE_SHIFT;
-	if (unlikely(linear_map_hash_count > max_hash_count)) {
-		pr_info("linear map size (%llu) greater than 4 times RMA region (%llu). Disabling debug_pagealloc\n",
-			((u64)linear_map_hash_count << PAGE_SHIFT),
-			ppc64_rma_size);
-		linear_map_hash_count = 0;
-		return;
-	}
 
+	linear_map_hash_count = memblock_end_of_DRAM() >> PAGE_SHIFT;
 	linear_map_hash_slots = memblock_alloc_try_nid(
 			linear_map_hash_count, 1, MEMBLOCK_LOW_LIMIT,
 			ppc64_rma_size,	NUMA_NO_NODE);
@@ -359,7 +362,7 @@ static void hash_debug_pagealloc_alloc_slots(void)
 static inline void hash_debug_pagealloc_add_slot(phys_addr_t paddr,
 							int slot)
 {
-	if (!debug_pagealloc_enabled() || !linear_map_hash_count)
+	if (!hash_supports_debug_pagealloc())
 		return;
 	if ((paddr >> PAGE_SHIFT) < linear_map_hash_count)
 		linear_map_hash_slots[paddr >> PAGE_SHIFT] = slot | 0x80;
@@ -371,7 +374,7 @@ static int hash_debug_pagealloc_map_pages(struct page *page, int numpages,
 	unsigned long flags, vaddr, lmi;
 	int i;
 
-	if (!debug_pagealloc_enabled() || !linear_map_hash_count)
+	if (!hash_supports_debug_pagealloc())
 		return 0;
 
 	local_irq_save(flags);
@@ -1076,7 +1079,7 @@ static void __init htab_init_page_sizes(void)
 	bool aligned = true;
 	init_hpte_page_sizes();
 
-	if (!debug_pagealloc_enabled() && !kfence_early_init_enabled()) {
+	if (!hash_supports_debug_pagealloc() && !kfence_early_init_enabled()) {
 		/*
 		 * Pick a size for the linear mapping. Currently, we only
 		 * support 16M, 1M and 4K which is the default
