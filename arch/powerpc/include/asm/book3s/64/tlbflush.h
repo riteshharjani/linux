@@ -222,4 +222,9 @@ static inline bool cputlb_use_tlbie(void)
 	return tlbie_enabled;
 }
 
+bool arch_tlbbatch_should_defer(struct mm_struct *mm);
+void arch_tlbbatch_add_pending(struct arch_tlbflush_unmap_batch *batch,
+			       struct mm_struct *mm, unsigned long uaddr);
+void arch_flush_tlb_batched_pending(struct mm_struct *mm);
+void arch_tlbbatch_flush(struct arch_tlbflush_unmap_batch *batch);
 #endif /*  _ASM_POWERPC_BOOK3S_64_TLBFLUSH_H */

@@ -11,6 +11,7 @@
 #include <linux/mmu_context.h>
 #include <linux/sched/mm.h>
 #include <linux/debugfs.h>
+#include <linux/smp.h>
 
 #include <asm/ppc-opcode.h>
 #include <asm/tlb.h>
@@ -1585,3 +1586,34 @@ static int __init create_tlb_single_page_flush_ceiling(void)
 }
 late_initcall(create_tlb_single_page_flush_ceiling);
 
+#ifdef CONFIG_ARCH_WANT_BATCHED_UNMAP_TLB_FLUSH
+bool arch_tlbbatch_should_defer(struct mm_struct *mm)
+{
+	if (!radix_enabled())
+		return false;
+	return true;
+}
+
+void arch_tlbbatch_add_pending(struct arch_tlbflush_unmap_batch *batch,
+			       struct mm_struct *mm,
+			       unsigned long uaddr)
+{
+	cpumask_or(&batch->cpumask, &batch->cpumask, mm_cpumask(mm));
+}
+
+void arch_flush_tlb_batched_pending(struct mm_struct *mm)
+{
+	flush_tlb_mm(mm);
+}
+
+static inline void tlbiel_flush_all_lpid(void *arg)
+{
+	tlbiel_all_lpid(true);
+}
+
+void arch_tlbbatch_flush(struct arch_tlbflush_unmap_batch *batch)
+{
+	on_each_cpu_mask(&batch->cpumask, tlbiel_flush_all_lpid, NULL, 1);
+	cpumask_clear(&batch->cpumask);
+}
+#endif
