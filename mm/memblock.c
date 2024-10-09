@@ -181,6 +181,7 @@ unsigned long __init_memblock
 memblock_addrs_overlap(phys_addr_t base1, phys_addr_t size1, phys_addr_t base2,
 		       phys_addr_t size2)
 {
+	return in_range(base1, base2, size2) && in_range(base1 - 1 + size1, base2, size2);
 	return ((base1 < (base2 + size2)) && (base2 < (base1 + size1)));
 }
 
