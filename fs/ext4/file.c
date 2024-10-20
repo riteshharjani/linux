@@ -898,6 +898,9 @@ static int ext4_file_open(struct inode *inode, struct file *filp)
 			return ret;
 	}
 
+	if (S_ISREG(inode->i_mode) && ext4_can_atomic_write(inode->i_sb))
+		filp->f_mode |= FMODE_CAN_ATOMIC_WRITE;
+
 	filp->f_mode |= FMODE_NOWAIT | FMODE_CAN_ODIRECT;
 	return dquot_file_open(inode, filp);
 }
