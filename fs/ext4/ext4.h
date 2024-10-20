@@ -3862,6 +3862,13 @@ static inline int ext4_buffer_uptodate(struct buffer_head *bh)
 extern int ext4_block_write_begin(handle_t *handle, struct folio *folio,
 				  loff_t pos, unsigned len,
 				  get_block_t *get_block);
+
+static inline bool ext4_inode_can_atomicwrite(struct inode *inode)
+{
+	struct ext4_sb_info *sbi = EXT4_SB(inode->i_sb);
+	return sbi->fs_awu_min && sbi->fs_awu_max;
+}
+
 #endif	/* __KERNEL__ */
 
 #define EFSBADCRC	EBADMSG		/* Bad CRC detected */
