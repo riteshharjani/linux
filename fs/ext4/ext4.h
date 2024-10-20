@@ -3863,6 +3863,12 @@ static inline int ext4_buffer_uptodate(struct buffer_head *bh)
 extern int ext4_block_write_begin(handle_t *handle, struct folio *folio,
 				  loff_t pos, unsigned len,
 				  get_block_t *get_block);
+
+static inline bool ext4_inode_can_atomicwrite(struct inode *inode)
+{
+	return ext4_test_mount_flag(inode->i_sb, EXT4_MF_ATOMIC_WRITE);
+}
+
 #endif	/* __KERNEL__ */
 
 #define EFSBADCRC	EBADMSG		/* Bad CRC detected */
