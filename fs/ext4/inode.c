@@ -5578,6 +5578,13 @@ int ext4_getattr(struct mnt_idmap *idmap, const struct path *path,
 		}
 	}
 
+	if (S_ISREG(inode->i_mode) && (request_mask & STATX_WRITE_ATOMIC)) {
+		struct ext4_sb_info *sbi = EXT4_SB(inode->i_sb);
+
+		generic_fill_statx_atomic_writes(stat, sbi->fs_awu_min,
+						 sbi->fs_awu_max);
+	}
+
 	flags = ei->i_flags & EXT4_FL_USER_VISIBLE;
 	if (flags & EXT4_APPEND_FL)
 		stat->attributes |= STATX_ATTR_APPEND;

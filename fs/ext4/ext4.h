@@ -1729,6 +1729,10 @@ struct ext4_sb_info {
 	 */
 	struct work_struct s_sb_upd_work;
 
+	/* Atomic write unit values */
+	unsigned int fs_awu_min;
+	unsigned int fs_awu_max;
+
 	/* Ext4 fast commit sub transaction ID */
 	atomic_t s_fc_subtid;
 
