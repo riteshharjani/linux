@@ -3423,6 +3423,19 @@ out:
 	 */
 	map.m_len = fscrypt_limit_io_blocks(inode, map.m_lblk, map.m_len);
 
+	/*
+	 * [0 16k] followed by [0 8k] can work with bigalloc. However,
+	 * For now we don't support atomic writes of the pattern
+	 * [0 8k] followed by [0 16k] in case of bigalloc. This is because it
+	 * can cause the atomic writes to split in the iomap layer.
+	 * Atomic writes anyways has many constraints, so as a base support to
+	 * enable atomic writes using bigalloc, it is ok to return an error for
+	 * an unsupported write request.
+	 */
+	if (flags & IOMAP_ATOMIC) {
+		if (map.m_len < (length >> blkbits))
+			return -EINVAL;
+	}
 	ext4_set_iomap(inode, iomap, &map, offset, length, flags);
 
 	return 0;

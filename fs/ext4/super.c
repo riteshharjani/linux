@@ -4428,12 +4428,14 @@ static int ext4_handle_clustersize(struct super_block *sb)
 /*
  * ext4_atomic_write_init: Initializes filesystem min & max atomic write units.
  * @sb: super block
- * TODO: Later add support for bigalloc
  */
 static void ext4_atomic_write_init(struct super_block *sb)
 {
 	struct ext4_sb_info *sbi = EXT4_SB(sb);
 	struct block_device *bdev = sb->s_bdev;
+	unsigned int blkbits = sb->s_blocksize_bits;
+	unsigned int clustersize = sb->s_blocksize;
+
 
 	if (!bdev_can_atomic_write(bdev))
 		return;
@@ -4441,9 +4443,12 @@ static void ext4_atomic_write_init(struct super_block *sb)
 	if (!ext4_has_feature_extents(sb))
 		return;
 
+	if (ext4_has_feature_bigalloc(sb))
+		clustersize = 1U << (sbi->s_cluster_bits + blkbits);
+
 	sbi->fs_awu_min = max(sb->s_blocksize,
 			      bdev_atomic_write_unit_min_bytes(bdev));
-	sbi->fs_awu_max = min(sb->s_blocksize,
+	sbi->fs_awu_max = min(clustersize,
 			      bdev_atomic_write_unit_max_bytes(bdev));
 	if (sbi->fs_awu_min && sbi->fs_awu_max &&
 			sbi->fs_awu_min <= sbi->fs_awu_max) {
