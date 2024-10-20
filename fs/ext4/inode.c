@@ -3423,6 +3423,16 @@ out:
 	 */
 	map.m_len = fscrypt_limit_io_blocks(inode, map.m_lblk, map.m_len);
 
+	/*
+	 * For now we don't support atomic writes of the pattern
+	 * [0 8k] followed by [0 16k]. This is because it can cause the atomic
+	 * writes to split in the iomap layer.
+	 * TODO: Once iomap support is added this restriction can be lifted.
+	 */
+	if (flags & IOMAP_ATOMIC) {
+		if (map.m_len < length)
+			return -EINVAL;
+	}
 	ext4_set_iomap(inode, iomap, &map, offset, length, flags);
 
 	return 0;
