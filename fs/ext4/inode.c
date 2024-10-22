@@ -3449,12 +3449,16 @@ static int ext4_iomap_end(struct inode *inode, loff_t offset, loff_t length,
 {
 	/*
 	 * Check to see whether an error occurred while writing out the data to
-	 * the allocated blocks. If so, return the magic error code so that we
-	 * fallback to buffered I/O and attempt to complete the remainder of
-	 * the I/O. Any blocks that may have been allocated in preparation for
-	 * the direct I/O will be reused during buffered I/O.
+	 * the allocated blocks. If so, return the magic error code for
+	 * non-atomic write so that we fallback to buffered I/O and attempt to
+	 * complete the remainder of the I/O.
+	 * For atomic writes we will simply fail the I/O request if we coudn't
+	 * write anything. For non-atomic writes, any blocks that may have been
+	 * allocated in preparation for the direct I/O will be reused during
+	 * buffered I/O.
 	 */
-	if (flags & (IOMAP_WRITE | IOMAP_DIRECT) && written == 0)
+	if (!(flags & IOMAP_ATOMIC) && (flags & (IOMAP_WRITE | IOMAP_DIRECT))
+			&& written == 0)
 		return -ENOTBLK;
 
 	return 0;

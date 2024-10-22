@@ -576,8 +576,12 @@ static ssize_t ext4_dio_write_iter(struct kiocb *iocb, struct iov_iter *from)
 		iomap_ops = &ext4_iomap_overwrite_ops;
 	ret = iomap_dio_rw(iocb, from, iomap_ops, &ext4_dio_write_ops,
 			   dio_flags, NULL, 0);
-	if (ret == -ENOTBLK)
+	if (ret == -ENOTBLK) {
 		ret = 0;
+		/* we should never see -ENOTBLK in case of atomic dio writes */
+		WARN_ON_ONCE(iocb->ki_flags & IOCB_ATOMIC);
+	}
+
 	if (extend) {
 		/*
 		 * We always perform extending DIO write synchronously so by
@@ -598,6 +602,12 @@ out:
 	if (ret >= 0 && iov_iter_count(from)) {
 		ssize_t err;
 		loff_t endbyte;
+
+		/*
+		 * There is no support for atomic writes on buffered-io yet,
+		 * hence atomic dio writes should never fallback to buffered-io.
+		 */
+		WARN_ON_ONCE(iocb->ki_flags & IOCB_ATOMIC);
 
 		offset = iocb->ki_pos;
 		err = ext4_buffered_write_iter(iocb, from);
