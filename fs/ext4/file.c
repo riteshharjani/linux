@@ -576,8 +576,18 @@ static ssize_t ext4_dio_write_iter(struct kiocb *iocb, struct iov_iter *from)
 		iomap_ops = &ext4_iomap_overwrite_ops;
 	ret = iomap_dio_rw(iocb, from, iomap_ops, &ext4_dio_write_ops,
 			   dio_flags, NULL, 0);
-	if (ret == -ENOTBLK)
+	if (ret == -ENOTBLK) {
 		ret = 0;
+		/*
+		 * iomap can return -ENOTBLK if pagecache invalidation fails.
+		 * Let's make sure if -ENOTBLK is ever returned for atomic
+		 * writes than we fail the write request instead of fallback
+		 * to buffered-io.
+		 */
+		if (iocb->ki_flags & IOCB_ATOMIC)
+			ret = -EIO;
+	}
+
 	if (extend) {
 		/*
 		 * We always perform extending DIO write synchronously so by
