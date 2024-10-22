@@ -576,8 +576,15 @@ static ssize_t ext4_dio_write_iter(struct kiocb *iocb, struct iov_iter *from)
 		iomap_ops = &ext4_iomap_overwrite_ops;
 	ret = iomap_dio_rw(iocb, from, iomap_ops, &ext4_dio_write_ops,
 			   dio_flags, NULL, 0);
-	if (ret == -ENOTBLK)
+	if (ret == -ENOTBLK) {
 		ret = 0;
+		/*
+		 * iomap will never return -ENOTBLK if write fails for atomic
+		 * write. But let's just add a safety net.
+		 */
+		WARN_ON_ONCE(iocb->ki_flags & IOCB_ATOMIC);
+	}
+
 	if (extend) {
 		/*
 		 * We always perform extending DIO write synchronously so by
