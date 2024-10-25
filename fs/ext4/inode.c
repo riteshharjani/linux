@@ -3332,6 +3332,66 @@ static void ext4_set_iomap(struct inode *inode, struct iomap *iomap,
 	}
 }
 
+static int ext4_map_blocks_atomic(handle_t *handle, struct inode *inode,
+				  struct ext4_map_blocks *map)
+{
+	ext4_lblk_t m_lblk = map->m_lblk;
+	unsigned int m_len = map->m_len;
+	unsigned int mapped_len = 0, flags = 0;
+	u8 blkbits = inode->i_blkbits;
+	int ret;
+
+	ret = ext4_map_blocks(handle, inode, map, 0);
+	/*
+	 * We call EXT4_GET_BLOCKS_ZERO only when the requested range does not
+	 * have a single mapping type (Hole, Mapped, or Unwritten) throughout.
+	 * In that case we will loop over the requested range to allocate and
+	 * zero out the unwritten / holes in between, to give a single mapped
+	 * extent/region from [m_lblk, m_len]
+	 */
+	if (((loff_t)map->m_lblk << blkbits) >= i_size_read(inode))
+		flags = EXT4_GET_BLOCKS_CREATE;
+	else if ((ret == 0 && map->m_len >= m_len) ||
+		(ret >= m_len && map->m_flags & EXT4_MAP_UNWRITTEN))
+		flags = EXT4_GET_BLOCKS_IO_CREATE_EXT;
+	else
+		flags = EXT4_GET_BLOCKS_CREATE_ZERO;
+	/*
+	 * 1. If there is a hole in the begining < m_len
+	 * 2. If there is a hole covering the entire range m_len
+	 * 3. If there is an unwritten extent in between
+	 * 4. If there is a mapped written extent in between
+	 * 5. If we have unwritten and written extent in between.
+	 * 6. If we have hole and mapped extent in between.
+	 * 7. If we have hole and unwritten extent in between.
+	 * 8. We have all 3 types of extent in between.
+	 */
+	do {
+		ret = ext4_map_blocks(handle, inode, map, flags);
+		if (ret < 0)
+			return ret;
+		mapped_len += map->m_len;
+		map->m_lblk += map->m_len;
+		map->m_len = m_len - mapped_len;
+	} while (mapped_len < m_len);
+
+	map->m_lblk = m_lblk;
+	map->m_len = mapped_len;
+
+	/*
+	 * We did so much work in above loop. Let's ensure we have the expected
+	 * mapping for doing atomic writes. Because there is no going back from
+	 * here. We return this mapping to iomap after this, for doing DIO.
+	 */
+	ret = ext4_map_blocks(handle, inode, map, 0);
+	if (ret != m_len) {
+		ext4_warning_inode(inode, "allocation failed for atomic write request pos:%u, len:%u\n",
+				m_lblk, m_len);
+		return -EINVAL;
+	}
+	return mapped_len;
+}
+
 static int ext4_iomap_alloc(struct inode *inode, struct ext4_map_blocks *map,
 			    unsigned int flags)
 {
@@ -3376,7 +3436,10 @@ retry:
 	else if (ext4_test_inode_flag(inode, EXT4_INODE_EXTENTS))
 		m_flags = EXT4_GET_BLOCKS_IO_CREATE_EXT;
 
-	ret = ext4_map_blocks(handle, inode, map, m_flags);
+	if (flags & IOMAP_ATOMIC_HW && ext4_has_feature_bigalloc(inode->i_sb))
+		ret = ext4_map_blocks_atomic(handle, inode, map);
+	else
+		ret = ext4_map_blocks(handle, inode, map, m_flags);
 
 	/*
 	 * We cannot fill holes in indirect tree based inodes as that could
@@ -3400,6 +3463,7 @@ static int ext4_iomap_begin(struct inode *inode, loff_t offset, loff_t length,
 	int ret;
 	struct ext4_map_blocks map;
 	u8 blkbits = inode->i_blkbits;
+	loff_t blks_rq;
 
 	if ((offset >> blkbits) > EXT4_MAX_LOGICAL_BLOCK)
 		return -EINVAL;
@@ -3413,6 +3477,7 @@ static int ext4_iomap_begin(struct inode *inode, loff_t offset, loff_t length,
 	map.m_lblk = offset >> blkbits;
 	map.m_len = min_t(loff_t, (offset + length - 1) >> blkbits,
 			  EXT4_MAX_LOGICAL_BLOCK) - map.m_lblk + 1;
+	blks_rq = map.m_len;
 
 	if (flags & IOMAP_WRITE) {
 		/*
@@ -3423,8 +3488,12 @@ static int ext4_iomap_begin(struct inode *inode, loff_t offset, loff_t length,
 		 */
 		if (offset + length <= i_size_read(inode)) {
 			ret = ext4_map_blocks(NULL, inode, &map, 0);
-			if (ret > 0 && (map.m_flags & EXT4_MAP_MAPPED))
-				goto out;
+			if (map.m_flags & EXT4_MAP_MAPPED) {
+				if ((!(flags & IOMAP_ATOMIC_HW) && ret > 0) ||
+				   (flags & IOMAP_ATOMIC_HW && ret >= blks_rq))
+					goto out;
+			}
+			map.m_len = blks_rq;
 		}
 		ret = ext4_iomap_alloc(inode, &map, flags);
 	} else {
@@ -3441,6 +3510,21 @@ out:
 	 */
 	map.m_len = fscrypt_limit_io_blocks(inode, map.m_lblk, map.m_len);
 
+	/*
+	 * [0 16k] followed by [0 8k] can work with bigalloc. However,
+	 * For now we don't support atomic writes of the pattern
+	 * [0 8k] followed by [0 16k] in case of bigalloc. This is because it
+	 * can cause the atomic writes to split in the iomap layer.
+	 * Atomic writes anyways has many constraints, so as a base support to
+	 * enable atomic writes using bigalloc, it is ok to return an error for
+	 * an unsupported write request.
+	 */
+	if (flags & IOMAP_ATOMIC_HW) {
+		if (map.m_len < (length >> blkbits)) {
+			WARN_ON(1);
+			return -EINVAL;
+		}
+	}
 	ext4_set_iomap(inode, iomap, &map, offset, length, flags);
 
 	return 0;
