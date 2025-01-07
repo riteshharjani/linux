@@ -5540,7 +5540,20 @@ int numa_migrate_check(struct folio *folio, struct vm_fault *vmf,
 		      unsigned long addr, int *flags,
 		      bool writable, int *last_cpupid)
 {
-	struct vm_area_struct *vma = vmf->vma;
+	if (vmf) {
+		struct vm_area_struct *vma = vmf->vma;
+		const vm_flags_t vmflags = vma->vm_flags;
+
+		/*
+		 * Flag if the folio is shared between multiple address spaces.
+		 * This used later when determining whether to group tasks.
+		 */
+		if (folio_likely_mapped_shared(folio))
+			*flags |= vmflags & VM_SHARED ? TNF_SHARED : 0;
+
+		/* Record the current PID acceesing VMA */
+		vma_set_access_pid_bit(vma);
+	}
 
 	/*
 	 * Avoid grouping on RO pages in general. RO pages shouldn't hurt as
@@ -5554,12 +5567,6 @@ int numa_migrate_check(struct folio *folio, struct vm_fault *vmf,
 		*flags |= TNF_NO_GROUP;
 
 	/*
-	 * Flag if the folio is shared between multiple address spaces. This
-	 * is later used when determining whether to group tasks together
-	 */
-	if (folio_likely_mapped_shared(folio) && (vma->vm_flags & VM_SHARED))
-		*flags |= TNF_SHARED;
-	/*
 	 * For memory tiering mode, cpupid of slow memory page is used
 	 * to record page access time.  So use default value.
 	 */
@@ -5567,9 +5574,6 @@ int numa_migrate_check(struct folio *folio, struct vm_fault *vmf,
 		*last_cpupid = (-1 & LAST_CPUPID_MASK);
 	else
 		*last_cpupid = folio_last_cpupid(folio);
-
-	/* Record the current PID acceesing VMA */
-	vma_set_access_pid_bit(vma);
 
 #ifdef CONFIG_NUMA_BALANCING
 	count_vm_numa_event(NUMA_HINT_FAULTS);
