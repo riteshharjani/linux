@@ -5576,10 +5576,10 @@ int numa_migrate_check(struct folio *folio, struct vm_fault *vmf,
 		*last_cpupid = folio_last_cpupid(folio);
 
 #ifdef CONFIG_NUMA_BALANCING
-	count_vm_numa_event(NUMA_HINT_FAULTS);
-	count_memcg_folio_events(folio, NUMA_HINT_FAULTS, 1);
+	count_vm_numa_event(NUMA_HINT_TYPE(vmf));
+	count_memcg_folio_events(folio, NUMA_HINT_TYPE(vmf), 1);
 	if (folio_nid(folio) == numa_node_id()) {
-		count_vm_numa_event(NUMA_HINT_FAULTS_LOCAL);
+		count_vm_numa_event(NUMA_HINT_TYPE_LOCAL(vmf));
 		*flags |= TNF_FAULT_LOCAL;
 	}
 #endif
