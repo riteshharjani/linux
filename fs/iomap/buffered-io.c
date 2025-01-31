@@ -306,14 +306,27 @@ static void iomap_finish_folio_read(struct folio *folio, size_t off,
 		folio_end_read(folio, uptodate);
 }
 
+static u32 __iomap_read_end_io(struct bio *bio, int error)
+{
+	struct folio_iter fi;
+	u32 folio_count = 0;
+
+	bio_for_each_folio_all(fi, bio) {
+		iomap_finish_folio_read(fi.folio, fi.offset, fi.length, error);
+		folio_count++;
+	}
+	bio_put(bio);
+	return folio_count;
+}
+
 static void iomap_read_end_io(struct bio *bio)
 {
-	int error = blk_status_to_errno(bio->bi_status);
-	struct folio_iter fi;
+	__iomap_read_end_io(bio, blk_status_to_errno(bio->bi_status));
+}
 
-	bio_for_each_folio_all(fi, bio)
-		iomap_finish_folio_read(fi.folio, fi.offset, fi.length, error);
-	bio_put(bio);
+u32 iomap_finish_ioend_buffered_read(struct iomap_ioend *ioend)
+{
+	return __iomap_read_end_io(&ioend->io_bio, ioend->io_error);
 }
 
 struct iomap_readpage_ctx {
@@ -1568,7 +1581,7 @@ static void iomap_finish_folio_write(struct inode *inode, struct folio *folio,
  * state, release holds on bios, and finally free up memory.  Do not use the
  * ioend after this.
  */
-u32 iomap_finish_ioend_buffered(struct iomap_ioend *ioend)
+u32 iomap_finish_ioend_buffered_write(struct iomap_ioend *ioend)
 {
 	struct inode *inode = ioend->io_inode;
 	struct bio *bio = &ioend->io_bio;
@@ -1600,7 +1613,7 @@ static void iomap_writepage_end_bio(struct bio *bio)
 	struct iomap_ioend *ioend = iomap_ioend_from_bio(bio);
 
 	ioend->io_error = blk_status_to_errno(bio->bi_status);
-	iomap_finish_ioend_buffered(ioend);
+	iomap_finish_ioend_buffered_write(ioend);
 }
 
 /*
