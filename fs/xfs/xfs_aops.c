@@ -19,6 +19,7 @@
 #include "xfs_reflink.h"
 #include "xfs_errortag.h"
 #include "xfs_error.h"
+#include "xfs_data_csum.h"
 
 struct xfs_writepage_ctx {
 	struct iomap_writepage_ctx ctx;
@@ -122,6 +123,11 @@ xfs_end_ioend(
 		goto done;
 	}
 
+	if (bio_op(&ioend->io_bio) == REQ_OP_READ) {
+		error = xfs_data_csum_verify(ioend);
+		goto done;
+	}
+
 	/*
 	 * Success: commit the COW or unwritten blocks if needed.
 	 */
@@ -175,7 +181,7 @@ xfs_end_io(
 	}
 }
 
-STATIC void
+void
 xfs_end_bio(
 	struct bio		*bio)
 {
@@ -417,6 +423,8 @@ xfs_submit_ioend(
 
 	memalloc_nofs_restore(nofs_flag);
 
+	xfs_data_csum_generate(&ioend->io_bio);
+
 	/* send ioends that might require a transaction to the completion wq */
 	if (xfs_ioend_is_append(ioend) ||
 	    (ioend->io_flags & (IOMAP_IOEND_UNWRITTEN | IOMAP_IOEND_SHARED)))
@@ -517,19 +525,34 @@ xfs_vm_bmap(
 	return iomap_bmap(mapping, block, &xfs_read_iomap_ops);
 }
 
+static void xfs_buffered_read_submit_io(struct inode *inode,
+		struct bio *bio, loff_t file_offset)
+{
+	xfs_data_csum_alloc(bio);
+	iomap_init_ioend(inode, bio, file_offset, 0);
+	bio->bi_end_io = xfs_end_bio;
+	submit_bio(bio);
+}
+
+static const struct iomap_read_folio_ops xfs_iomap_read_ops = {
+	.bio_set	= &iomap_ioend_bioset,
+	.submit_io	= xfs_buffered_read_submit_io,
+};
+
 STATIC int
 xfs_vm_read_folio(
 	struct file		*unused,
 	struct folio		*folio)
 {
-	return iomap_read_folio(folio, &xfs_read_iomap_ops, NULL);
+	return iomap_read_folio(folio, &xfs_read_iomap_ops,
+			&xfs_iomap_read_ops);
 }
 
 STATIC void
 xfs_vm_readahead(
 	struct readahead_control	*rac)
 {
-	iomap_readahead(rac, &xfs_read_iomap_ops, NULL);
+	iomap_readahead(rac, &xfs_read_iomap_ops, &xfs_iomap_read_ops);
 }
 
 static int

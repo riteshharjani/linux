@@ -25,6 +25,8 @@
 #include "xfs_iomap.h"
 #include "xfs_reflink.h"
 #include "xfs_file.h"
+#include "xfs_data_csum.h"
+#include "xfs_aops.h"
 
 #include <linux/dax.h>
 #include <linux/falloc.h>
@@ -227,6 +229,20 @@ xfs_ilock_iocb_for_write(
 	return 0;
 }
 
+static void xfs_dio_read_submit_io(const struct iomap_iter *iter,
+		struct bio *bio, loff_t file_offset)
+{
+	xfs_data_csum_alloc(bio);
+	iomap_init_ioend(iter->inode, bio, file_offset, IOMAP_IOEND_DIRECT);
+	bio->bi_end_io = xfs_end_bio;
+	submit_bio(bio);
+}
+
+static const struct iomap_dio_ops xfs_dio_read_ops = {
+	.bio_set	= &iomap_ioend_bioset,
+	.submit_io	= xfs_dio_read_submit_io,
+};
+
 STATIC ssize_t
 xfs_file_dio_read(
 	struct kiocb		*iocb,
@@ -245,7 +261,8 @@ xfs_file_dio_read(
 	ret = xfs_ilock_iocb(iocb, XFS_IOLOCK_SHARED);
 	if (ret)
 		return ret;
-	ret = iomap_dio_rw(iocb, to, &xfs_read_iomap_ops, NULL, 0, NULL, 0);
+	ret = iomap_dio_rw(iocb, to, &xfs_read_iomap_ops, &xfs_dio_read_ops, 0,
+			NULL, 0);
 	xfs_iunlock(ip, XFS_IOLOCK_SHARED);
 
 	return ret;
@@ -578,8 +595,16 @@ out:
 	return error;
 }
 
+static void xfs_dio_write_submit_io(const struct iomap_iter *iter,
+		struct bio *bio, loff_t file_offset)
+{
+	xfs_data_csum_generate(bio);
+	submit_bio(bio);
+}
+
 static const struct iomap_dio_ops xfs_dio_write_ops = {
 	.end_io		= xfs_dio_write_end_io,
+	.submit_io	= xfs_dio_write_submit_io,
 };
 
 /*

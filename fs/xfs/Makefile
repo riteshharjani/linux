@@ -73,6 +73,7 @@ xfs-y				+= xfs_aops.o \
 				   xfs_bmap_util.o \
 				   xfs_bio_io.o \
 				   xfs_buf.o \
+				   xfs_data_csum.o \
 				   xfs_dahash_test.o \
 				   xfs_dir2_readdir.o \
 				   xfs_discard.o \

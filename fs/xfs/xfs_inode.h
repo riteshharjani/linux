@@ -609,10 +609,8 @@ int	xfs_break_layouts(struct inode *inode, uint *iolock,
 
 static inline void xfs_update_stable_writes(struct xfs_inode *ip)
 {
-	if (bdev_stable_writes(xfs_inode_buftarg(ip)->bt_bdev))
-		mapping_set_stable_writes(VFS_I(ip)->i_mapping);
-	else
-		mapping_clear_stable_writes(VFS_I(ip)->i_mapping);
+	/* XXX: unconditional for now */
+	mapping_set_stable_writes(VFS_I(ip)->i_mapping);
 }
 
 /*
