@@ -81,6 +81,9 @@ void bio_integrity_advance(struct bio *bio, unsigned int bytes_done);
 void bio_integrity_trim(struct bio *bio);
 int bio_integrity_clone(struct bio *bio, struct bio *bio_src, gfp_t gfp_mask);
 
+void blk_integrity_generate(struct bio *bio);
+int blk_integrity_verify_all(struct bio *bio, sector_t seed);
+
 #else /* CONFIG_BLK_DEV_INTEGRITY */
 
 static inline struct bio_integrity_payload *bio_integrity(struct bio *bio)
@@ -135,6 +138,15 @@ bio_integrity_alloc(struct bio *bio, gfp_t gfp, unsigned int nr)
 
 static inline int bio_integrity_add_page(struct bio *bio, struct page *page,
 					unsigned int len, unsigned int offset)
+{
+	return 0;
+}
+
+static inline void blk_integrity_generate(struct bio *bio)
+{
+}
+
+static inline int blk_integrity_verify_all(struct bio *bio, sector_t seed)
 {
 	return 0;
 }

@@ -403,48 +403,84 @@ void blk_integrity_generate(struct bio *bio)
 		kunmap_local(kaddr);
 	}
 }
+EXPORT_SYMBOL_GPL(blk_integrity_generate);
 
+static blk_status_t blk_integrity_verify_bvec(struct blk_integrity *bi,
+		struct blk_integrity_iter *iter, struct bio_vec *bv)
+{
+	void *kaddr = bvec_kmap_local(bv);
+	blk_status_t ret = BLK_STS_OK;
+
+	iter->data_buf = kaddr;
+	iter->data_size = bv->bv_len;
+	switch (bi->csum_type) {
+	case BLK_INTEGRITY_CSUM_CRC64:
+		ret = ext_pi_crc64_verify(iter, bi);
+		break;
+	case BLK_INTEGRITY_CSUM_CRC:
+	case BLK_INTEGRITY_CSUM_IP:
+		ret = t10_pi_verify(iter, bi);
+		break;
+	default:
+		break;
+	}
+	kunmap_local(kaddr);
+	return ret;
+}
+
+/*
+ * At the moment verify is called, bi_iter could have been advanced by splits
+ * and completions, thus we have to use the saved copy here.
+ */
 void blk_integrity_verify_iter(struct bio *bio, struct bvec_iter *saved_iter)
 {
 	struct blk_integrity *bi = blk_get_integrity(bio->bi_bdev->bd_disk);
 	struct bio_integrity_payload *bip = bio_integrity(bio);
-	struct blk_integrity_iter iter;
+	struct blk_integrity_iter iter = {
+		.disk_name	= bio->bi_bdev->bd_disk->disk_name,
+		.interval	= 1 << bi->interval_exp,
+		.seed		= saved_iter->bi_sector,
+		.prot_buf	= bvec_virt(bip->bip_vec),
+	};
 	struct bvec_iter bviter;
 	struct bio_vec bv;
+	blk_status_t ret;
 
-	/*
-	 * At the moment verify is called bi_iter has been advanced during split
-	 * and completion, so use the copy created during submission here.
-	 */
-	iter.disk_name = bio->bi_bdev->bd_disk->disk_name;
-	iter.interval = 1 << bi->interval_exp;
-	iter.seed = saved_iter->bi_sector;
-	iter.prot_buf = bvec_virt(bip->bip_vec);
 	__bio_for_each_segment(bv, bio, bviter, *saved_iter) {
-		void *kaddr = bvec_kmap_local(&bv);
-		blk_status_t ret = BLK_STS_OK;
-
-		iter.data_buf = kaddr;
-		iter.data_size = bv.bv_len;
-		switch (bi->csum_type) {
-		case BLK_INTEGRITY_CSUM_CRC64:
-			ret = ext_pi_crc64_verify(&iter, bi);
-			break;
-		case BLK_INTEGRITY_CSUM_CRC:
-		case BLK_INTEGRITY_CSUM_IP:
-			ret = t10_pi_verify(&iter, bi);
-			break;
-		default:
-			break;
-		}
-		kunmap_local(kaddr);
-
+		ret = blk_integrity_verify_bvec(bi, &iter, &bv);
 		if (ret) {
 			bio->bi_status = ret;
 			return;
 		}
 	}
 }
+
+/*
+ * For use by the file system which owns the entire bio.
+ */
+int blk_integrity_verify_all(struct bio *bio, sector_t seed)
+{
+	struct blk_integrity *bi = blk_get_integrity(bio->bi_bdev->bd_disk);
+	struct bio_integrity_payload *bip = bio_integrity(bio);
+	struct blk_integrity_iter iter = {
+		.disk_name	= bio->bi_bdev->bd_disk->disk_name,
+		.interval	= 1 << bi->interval_exp,
+		.seed		= seed,
+		.prot_buf	= bvec_virt(bip->bip_vec),
+	};
+	struct bvec_iter_all bviter;
+	struct bio_vec *bv;
+	blk_status_t ret;
+
+	bio_for_each_segment_all(bv, bio, bviter) {
+		ret = blk_integrity_verify_bvec(bi, &iter, bv);
+		if (ret)
+			return blk_status_to_errno(ret);
+	}
+
+	return 0;
+}
+EXPORT_SYMBOL_GPL(blk_integrity_verify_all);
 
 void blk_integrity_prepare(struct request *rq)
 {
