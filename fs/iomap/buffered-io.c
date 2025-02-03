@@ -456,6 +456,7 @@ static loff_t iomap_readpage_iter(const struct iomap_iter *iter,
 	sector = iomap_sector(iomap, pos);
 	if (!ctx->bio ||
 	    bio_end_sector(ctx->bio) != sector ||
+	    ctx->bio->bi_iter.bi_size > SZ_128M ||
 	    !bio_add_folio(ctx->bio, folio, plen, poff)) {
 		if (ctx->bio)
 			iomap_read_submit_bio(iter, ctx);
@@ -1674,6 +1675,8 @@ static struct iomap_ioend *iomap_alloc_ioend(struct iomap_writepage_ctx *wpc,
 static bool iomap_can_add_to_ioend(struct iomap_writepage_ctx *wpc, loff_t pos,
 		u16 ioend_flags)
 {
+	if (wpc->ioend->io_bio.bi_iter.bi_size > SZ_128M)
+		return false;
 	if (ioend_flags & IOMAP_IOEND_BOUNDARY)
 		return false;
 	if ((ioend_flags & IOMAP_IOEND_NOMERGE_FLAGS) !=
