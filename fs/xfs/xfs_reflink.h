@@ -11,6 +11,8 @@
  */
 /* convert unwritten extents now */
 #define XFS_REFLINK_CONVERT_UNWRITTEN		(1u << 0)
+/* force a new COW mapping to be allocated */
+#define XFS_REFLINK_FORCE_COW			(1u << 1)
 
 /*
  * Check whether it is safe to free COW fork blocks from an inode. It is unsafe

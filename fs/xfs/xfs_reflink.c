@@ -466,7 +466,7 @@ xfs_reflink_fill_cow_hole(
 	*lockmode = XFS_ILOCK_EXCL;
 
 	error = xfs_find_trim_cow_extent(ip, imap, cmap, shared, &found);
-	if (error || !*shared)
+	if (error || (!*shared && !(flags & XFS_REFLINK_FORCE_COW)))
 		goto out_trans_cancel;
 
 	if (found) {
@@ -582,8 +582,22 @@ xfs_reflink_allocate_cow(
 	}
 
 	error = xfs_find_trim_cow_extent(ip, imap, cmap, shared, &found);
-	if (error || !*shared)
+	if (error)
 		return error;
+
+	/*
+	 * For no shared data extent, return only as long as
+	 * XFS_REFLINK_FORCE_COW is not set.
+	 *
+	 * For XFS_REFLINK_FORCE_COW set, we always return a COW fork extent
+	 * mapping. That would be from either a previously allocated unwritten
+	 * COW fork extent, or else a new COW fork extent needs to be
+	 * allocated. A previously allocated unwritten COW fork extent could be
+	 * from an earlier call with XFS_REFLINK_FORCE_COW set or from a
+	 * earlier normal unshare of a data extent.
+	 */
+	if (!*shared && !(flags & XFS_REFLINK_FORCE_COW))
+		return 0;
 
 	/* CoW fork has a real extent */
 	if (found)
