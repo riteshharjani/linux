@@ -13,6 +13,8 @@
 #define XFS_REFLINK_CONVERT_UNWRITTEN		(1u << 0)
 /* force a new COW mapping to be allocated */
 #define XFS_REFLINK_FORCE_COW			(1u << 1)
+/* request block allocations aligned to extszhint */
+#define XFS_REFLINK_ALLOC_EXTSZALIGN		(1u << 2)
 
 /*
  * Check whether it is safe to free COW fork blocks from an inode. It is unsafe
