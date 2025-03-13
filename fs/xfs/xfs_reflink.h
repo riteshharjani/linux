@@ -7,6 +7,12 @@
 #define __XFS_REFLINK_H 1
 
 /*
+ * Flags for xfs_reflink_allocate_cow() and callees
+ */
+/* convert unwritten extents now */
+#define XFS_REFLINK_CONVERT_UNWRITTEN		(1u << 0)
+
+/*
  * Check whether it is safe to free COW fork blocks from an inode. It is unsafe
  * to do so when an inode has dirty cache or I/O in-flight, even if no shared
  * extents exist in the data fork, because outstanding I/O may target blocks
@@ -32,7 +38,7 @@ int xfs_bmap_trim_cow(struct xfs_inode *ip, struct xfs_bmbt_irec *imap,
 
 int xfs_reflink_allocate_cow(struct xfs_inode *ip, struct xfs_bmbt_irec *imap,
 		struct xfs_bmbt_irec *cmap, bool *shared, uint *lockmode,
-		bool convert_now);
+		unsigned int flags);
 extern int xfs_reflink_convert_cow(struct xfs_inode *ip, xfs_off_t offset,
 		xfs_off_t count);
 
