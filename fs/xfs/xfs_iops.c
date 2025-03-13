@@ -601,16 +601,34 @@ xfs_report_dioalign(
 		stat->dio_offset_align = stat->dio_read_offset_align;
 }
 
+unsigned int
+xfs_get_atomic_write_min_attr(
+	struct xfs_inode	*ip)
+{
+	if (!xfs_inode_can_atomicwrite(ip))
+		return 0;
+
+	return ip->i_mount->m_sb.sb_blocksize;
+}
+
+unsigned int
+xfs_get_atomic_write_max_attr(
+	struct xfs_inode	*ip)
+{
+	if (!xfs_inode_can_atomicwrite(ip))
+		return 0;
+
+	return ip->i_mount->m_sb.sb_blocksize;
+}
+
 static void
 xfs_report_atomic_write(
 	struct xfs_inode	*ip,
 	struct kstat		*stat)
 {
-	unsigned int		unit_min = 0, unit_max = 0;
-
-	if (xfs_inode_can_atomicwrite(ip))
-		unit_min = unit_max = ip->i_mount->m_sb.sb_blocksize;
-	generic_fill_statx_atomic_writes(stat, unit_min, unit_max);
+	generic_fill_statx_atomic_writes(stat,
+			xfs_get_atomic_write_min_attr(ip),
+			xfs_get_atomic_write_max_attr(ip));
 }
 
 STATIC int
