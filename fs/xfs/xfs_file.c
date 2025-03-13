@@ -726,6 +726,75 @@ xfs_file_dio_write_zoned(
 }
 
 /*
+ * Handle block atomic writes
+ *
+ * Two methods of atomic writes are supported:
+ * - REQ_ATOMIC-based, which would typically use some form of HW offload in the
+ *   disk
+ * - COW-based, which uses a COW fork as a staging extent for data updates
+ *   before atomically updating extent mappings for the range being written
+ *
+ * REQ_ATOMIC-based is the preferred method, and is attempted first. If this
+ * method fails due to REQ_ATOMIC-related constraints, then we retry with the
+ * COW-based method. The REQ_ATOMIC-based method typically will fail if the
+ * write spans multiple extents or the disk blocks are misaligned.
+ *
+ * Similar to xfs_file_dio_write_unaligned(), the retry mechanism is based on
+ * the ->iomap_begin method returning -EAGAIN, which would be when the
+ * REQ_ATOMIC-based write is not possible. In the case of IOCB_NOWAIT being set,
+ * then we will not retry with the COW-based method, and instead pass that
+ * error code back to the caller immediately.
+ *
+ * REQ_ATOMIC-based atomic writes behave such that a racing read which overlaps
+ * with range being atomically written will see all or none of the old data.
+ * Emulate this behaviour for COW-based atomic writes by using
+ * IOMAP_DIO_FORCE_WAIT and inode_dio_wait() to ensure active reads. This also
+ * locks out racing writes, which could trample on the COW fork extent.
+ */
+
+static noinline ssize_t
+xfs_file_dio_write_atomic(
+	struct xfs_inode	*ip,
+	struct kiocb		*iocb,
+	struct iov_iter		*from)
+{
+	unsigned int		iolock = XFS_IOLOCK_SHARED;
+	unsigned int		dio_flags = 0;
+	const struct iomap_ops	*dops = &xfs_direct_write_iomap_ops;
+	ssize_t			ret;
+
+retry:
+	ret = xfs_ilock_iocb_for_write(iocb, &iolock);
+	if (ret)
+		return ret;
+
+	ret = xfs_file_write_checks(iocb, from, &iolock, NULL);
+	if (ret)
+		goto out_unlock;
+
+	if (dio_flags & IOMAP_DIO_FORCE_WAIT)
+		inode_dio_wait(VFS_I(ip));
+
+	trace_xfs_file_direct_write(iocb, from);
+	ret = iomap_dio_rw(iocb, from, dops, &xfs_dio_write_ops,
+			dio_flags, NULL, 0);
+
+	if (ret == -EAGAIN && !(iocb->ki_flags & IOCB_NOWAIT) &&
+	    dops == &xfs_direct_write_iomap_ops) {
+		xfs_iunlock(ip, iolock);
+		dio_flags = IOMAP_DIO_FORCE_WAIT;
+		dops = &xfs_atomic_write_cow_iomap_ops;
+		iolock = XFS_IOLOCK_EXCL;
+		goto retry;
+	}
+
+out_unlock:
+	if (iolock)
+		xfs_iunlock(ip, iolock);
+	return ret;
+}
+
+/*
  * Handle block unaligned direct I/O writes
  *
  * In most cases direct I/O writes will be done holding IOLOCK_SHARED, allowing
@@ -840,6 +909,10 @@ xfs_file_dio_write(
 		return xfs_file_dio_write_unaligned(ip, iocb, from);
 	if (xfs_is_zoned_inode(ip))
 		return xfs_file_dio_write_zoned(ip, iocb, from);
+
+	if (iocb->ki_flags & IOCB_ATOMIC)
+		return xfs_file_dio_write_atomic(ip, iocb, from);
+
 	return xfs_file_dio_write_aligned(ip, iocb, from,
 			&xfs_direct_write_iomap_ops, &xfs_dio_write_ops, NULL);
 }
