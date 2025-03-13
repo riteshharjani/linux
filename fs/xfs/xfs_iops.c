@@ -615,10 +615,22 @@ unsigned int
 xfs_get_atomic_write_max_attr(
 	struct xfs_inode	*ip)
 {
+	struct xfs_buftarg	*target = xfs_inode_buftarg(ip);
+	struct xfs_mount	*mp = ip->i_mount;
+
 	if (!xfs_inode_can_atomicwrite(ip))
 		return 0;
 
-	return ip->i_mount->m_sb.sb_blocksize;
+	/*
+	 * rtvol is not commonly used and supporting large atomic writes
+	 * would also be complicated to support there, so limit to a single
+	 * block for now.
+	 */
+	if (XFS_IS_REALTIME_INODE(ip))
+		return mp->m_sb.sb_blocksize;
+
+	return min_t(unsigned int, XFS_FSB_TO_B(mp, mp->m_awu_max),
+				target->bt_bdev_awu_max);
 }
 
 static void
