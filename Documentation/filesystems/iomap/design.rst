@@ -243,6 +243,10 @@ The fields are as follows:
      regular file data.
      This is only useful for FIEMAP.
 
+   * **IOMAP_F_BOUNDARY**: This indicates that I/O and I/O completions for this
+     iomap must never be merged with the mapping before it. Currently XFS uses
+     this to prevent merging of ioends across RTG (realtime group) boundaries.
+
    * **IOMAP_F_PRIVATE**: Starting with this value, the upper bits can
      be set by the filesystem for its own purposes.
 
