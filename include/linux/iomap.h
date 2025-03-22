@@ -88,8 +88,8 @@ struct vm_fault;
  * range it covers needs to be remapped by the high level before the operation
  * can proceed.
  */
-#define IOMAP_F_SIZE_CHANGED	(1U << 8)
-#define IOMAP_F_STALE		(1U << 9)
+#define IOMAP_F_SIZE_CHANGED	(1U << 9)
+#define IOMAP_F_STALE		(1U << 10)
 
 /*
  * Flags from 0x1000 up are for file system specific usage:
