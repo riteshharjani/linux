@@ -222,6 +222,8 @@ enum criteria {
 /* Avg fragment size rb tree lookup succeeded at least once for
  * CR_BEST_AVAIL_LEN */
 #define EXT4_MB_CR_BEST_AVAIL_LEN_OPTIMIZED		0x00020000
+/* mballoc will try to align physical start to length (aka natural alignment) */
+#define EXT4_MB_HINT_ALIGNED	      	0x40000
 
 struct ext4_allocation_request {
 	/* target inode for block we're allocating */
