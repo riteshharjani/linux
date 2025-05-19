@@ -120,6 +120,9 @@ static inline void register_memory_blocks_under_node(int nid, unsigned long star
 						     enum meminit_context context)
 {
 }
+static inline void register_memory_blocks_under_node_early(void)
+{
+}
 #endif
 
 extern void unregister_node(struct node *node);
