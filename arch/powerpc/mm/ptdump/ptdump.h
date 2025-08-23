@@ -13,6 +13,7 @@ struct flag_info {
 
 struct pgtable_level {
 	const struct flag_info *flag;
+	char name[4];
 	size_t num;
 	u64 mask;
 };
