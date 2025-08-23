@@ -24,10 +24,17 @@ class page_ops():
     def __init__(self):
         if not constants.LX_CONFIG_SPARSEMEM_VMEMMAP:
             raise gdb.GdbError('Only support CONFIG_SPARSEMEM_VMEMMAP now')
-        if constants.LX_CONFIG_ARM64 and utils.is_target_arch('aarch64'):
+
+        if utils.is_target_arch('aarch64'):
+            if not constants.LX_CONFIG_ARM64:
+                raise gdb.GdbError('ARM64 page ops require CONFIG_ARM64')
             self.ops = aarch64_page_ops()
+        elif utils.is_target_arch('powerpc'):
+            if not constants.LX_CONFIG_PPC_BOOK3S_64:
+                raise gdb.GdbError('Only supported for Book3s_64')
+            self.ops = powerpc64_page_ops()
         else:
-            raise gdb.GdbError('Only support aarch64 now')
+            raise gdb.GdbError('Unsupported arch for page ops')
 
 class aarch64_page_ops():
     def __init__(self):
@@ -286,6 +293,109 @@ class aarch64_page_ops():
 
     def folio_address(self, folio):
         return self.page_address(folio['page'].address)
+
+
+class powerpc64_page_ops():
+    """powerpc64 minimal Virtual Memory operations
+    """
+
+    def __init__(self):
+        vmemmap_sym = gdb.parse_and_eval('vmemmap')
+        self.vmemmap = vmemmap_sym.cast(utils.get_page_type().pointer())
+
+        self.PAGE_SHIFT = constants.LX_CONFIG_PAGE_SHIFT
+        self.PAGE_OFFSET = constants.LX_CONFIG_PAGE_OFFSET
+        self.KERNEL_START = constants.LX_CONFIG_KERNEL_START
+
+        # These variables are common for both Hash and Radix so no
+        # need to explicitely check for MMU mode.
+        self.KERNEL_VIRT_START = gdb.parse_and_eval("__kernel_virt_start")
+        self.VMALLOC_START = gdb.parse_and_eval("__vmalloc_start")
+        self.VMALLOC_END = gdb.parse_and_eval("__vmalloc_end")
+        self.KERNEL_IO_START = gdb.parse_and_eval("__kernel_io_start")
+        self.KERNEL_IO_END = gdb.parse_and_eval("__kernel_io_end")
+        # KERN_MAP_SIZE can be calculated from below trick to avoid
+        # checking Hash 4k/64k pagesize
+        self.KERN_MAP_SIZE = self.KERNEL_IO_END - self.KERNEL_IO_START
+        self.VMEMMAP_START = gdb.parse_and_eval("vmemmap")
+        self.VMEMMAP_SIZE = self.KERN_MAP_SIZE
+        self.VMEMMAP_END = self.VMEMMAP_START + self.VMEMMAP_SIZE
+
+        if constants.LX_CONFIG_NUMA and constants.LX_CONFIG_NODES_SHIFT:
+            self.NODE_SHIFT = constants.LX_CONFIG_NODES_SHIFT
+        else:
+            self.NODE_SHIFT = 0
+        self.MAX_NUMNODES = 1 << self.NODE_SHIFT
+
+    def PFN_PHYS(self, pfn):
+        return pfn << self.PAGE_SHIFT
+
+    def PHYS_PFN(self, pfn):
+        return pfn >> self.PAGE_SHIFT
+
+    def __va(self, pa):
+        return pa | self.PAGE_OFFSET
+
+    def __pa(self, va):
+        return va & 0x0fffffffffffffff;
+
+    def pfn_to_page(self, pfn):
+        return (self.vmemmap + int(pfn)).cast(utils.get_page_type().pointer())
+
+    def page_to_pfn(self, page):
+        pagep = page.cast(utils.get_page_type().pointer())
+        return int(pagep - self.vmemmap)
+
+    def page_address(self, page):
+        pfn = self.page_to_pfn(page)
+        va = self.PAGE_OFFSET + (pfn << self.PAGE_SHIFT)
+        return va
+
+    def page_to_phys(self, page):
+        pfn = self.page_to_pfn(page)
+        return self.PFN_PHYS(pfn)
+
+    def phys_to_page(self, pa):
+        pfn = self.PHYS_PFN(pa)
+        return self.pfn_to_page(pfn)
+
+    def phys_to_virt(self, pa):
+        return self.__va(pa)
+
+    def virt_to_phys(self, va):
+        return self.__pa(va)
+
+    def virt_to_pfn(self, va):
+        return self.__pa(va) >> self.PAGE_SHIFT
+
+    def virt_to_page(self, va):
+        return self.pfn_to_page(self.virt_to_pfn(va))
+
+    def pfn_to_kaddr(self, pfn):
+        return self.__va(pfn << self.PAGE_SHIFT)
+
+    # powerpc does not use tags for KASAN. So simply return addr
+    def kasan_reset_tag(self, addr):
+        return addr
+
+class LxMmuInfo(gdb.Command):
+    """MMU Type for PowerPC Book3s64"""
+
+    def __init__(self):
+        super(LxMmuInfo, self).__init__("lx-mmu_info", gdb.COMMAND_USER)
+
+    def invoke(self, arg, from_tty):
+        if not constants.LX_CONFIG_PPC_BOOK3S_64:
+            raise gdb.GdbError("Only supported for Book3s_64")
+
+        lpcr = gdb.parse_and_eval("(unsigned long)$lpcr")
+        # Host Radix bit should be 1 in LPCR for Radix MMU
+        if (lpcr & 0x0000000000100000):
+            gdb.write("MMU: Radix\n")
+        else:
+            gdb.write("MMU: Hash\n")
+
+LxMmuInfo()
 
 class LxPFN2Page(gdb.Command):
     """PFN to struct page"""
