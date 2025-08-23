@@ -13,7 +13,7 @@
 
 import gdb
 
-from linux import tasks, utils
+from linux import tasks, utils, constants
 
 
 task_type = utils.CachedType("struct task_struct")
@@ -207,6 +207,21 @@ def get_current_task(cpu):
             current_task = scratch_reg.cast(task_ptr_type)
 
         return current_task.dereference()
+    elif utils.is_target_arch("powerpc"):
+        if not constants.LX_CONFIG_PPC_BOOK3S_64:
+            raise gdb.GdbError('For now only supported for BOOK3S_64')
+
+        msr = gdb.parse_and_eval("(unsigned long)$msr")
+        # PR (Problem State) should be 0 for kernel mode
+        in_kernel = msr & (0x1 << 14) == 0
+        if in_kernel:
+            paca_ptr_type = gdb.lookup_type("struct paca_struct").pointer()
+            paca_ptr = gdb.parse_and_eval("$r13")
+            paca = paca_ptr.cast(paca_ptr_type).dereference()
+            return paca["__current"].cast(task_ptr_type).dereference()
+        else:
+            raise gdb.GdbError("Sorry, obtaining the current task is not allowed "
+                               "while running in userspace (Problem State)")
     else:
         raise gdb.GdbError("Sorry, obtaining the current task is not yet "
                            "supported with this arch")
