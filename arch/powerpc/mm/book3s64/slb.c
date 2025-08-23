@@ -22,6 +22,7 @@
 #include <linux/context_tracking.h>
 #include <linux/mm_types.h>
 #include <linux/pgtable.h>
+#include <linux/vmstat.h>
 
 #include <asm/udbg.h>
 #include <asm/text-patching.h>
@@ -748,6 +749,8 @@ DEFINE_INTERRUPT_HANDLER_RAW(do_slb_fault)
 
 	/* IRQs are not reconciled here, so can't check irqs_disabled */
 	VM_WARN_ON(mfmsr() & MSR_EE);
+
+	count_vm_event(SLB_FAULTS);
 
 	if (regs_is_unrecoverable(regs))
 		return -EINVAL;
