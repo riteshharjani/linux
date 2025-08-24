@@ -1394,7 +1394,7 @@ static void __init htab_initialize(void)
 		size = end - base;
 		base = (unsigned long)__va(base);
 
-		DBG("creating mapping for region: %lx..%lx (prot: %lx)\n",
+		DBG("creating mapping for region: %llx..%llx (prot: %lx)\n",
 		    base, size, prot);
 
 		if ((base + size) >= H_VMALLOC_START) {
