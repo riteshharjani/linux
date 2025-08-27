@@ -294,7 +294,7 @@ static bool preload_hit(struct thread_info *ti, unsigned long esid)
 	return false;
 }
 
-static bool preload_add(struct thread_info *ti, unsigned long ea)
+static void preload_add(struct thread_info *ti, unsigned long ea)
 {
 	unsigned char idx;
 	unsigned long esid;
@@ -308,7 +308,7 @@ static bool preload_add(struct thread_info *ti, unsigned long ea)
 	esid = ea >> SID_SHIFT;
 
 	if (preload_hit(ti, esid))
-		return false;
+		return;
 
 	idx = (ti->slb_preload_tail + ti->slb_preload_nr) % SLB_PRELOAD_NR;
 	ti->slb_preload_esid[idx] = esid;
@@ -317,7 +317,7 @@ static bool preload_add(struct thread_info *ti, unsigned long ea)
 	else
 		ti->slb_preload_nr++;
 
-	return true;
+	return;
 }
 
 static void preload_age(struct thread_info *ti)
