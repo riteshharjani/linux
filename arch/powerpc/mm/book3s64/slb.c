@@ -22,6 +22,7 @@
 #include <linux/context_tracking.h>
 #include <linux/mm_types.h>
 #include <linux/pgtable.h>
+#include <linux/vmstat.h>
 
 #include <asm/udbg.h>
 #include <asm/text-patching.h>
@@ -778,6 +779,7 @@ DEFINE_INTERRUPT_HANDLER_RAW(do_slb_fault)
 #ifdef CONFIG_DEBUG_VM
 		local_paca->in_kernel_slb_handler = 0;
 #endif
+		count_vm_event(SLB_KERNEL_FAULTS);
 		return err;
 	} else {
 		struct mm_struct *mm = current->mm;
@@ -790,6 +792,7 @@ DEFINE_INTERRUPT_HANDLER_RAW(do_slb_fault)
 		if (!err)
 			preload_add(current_thread_info(), ea);
 
+		count_vm_event(SLB_USER_FAULTS);
 		return err;
 	}
 }
