@@ -1134,6 +1134,8 @@ static int kfd_ioctl_alloc_memory_of_gpu(struct file *filep,
 		offset = dev->adev->rmmio_remap.bus_addr;
 		if (!offset || (PAGE_SIZE > 4096)) {
 			err = -ENOMEM;
+			pr_err("%s: Failed MMIO remap off:0x%llx PAGE_SIZE:%lu (requires 4K)\n",
+				__func__, offset, PAGE_SIZE);
 			goto err_unlock;
 		}
 	}
@@ -2317,7 +2319,8 @@ static int criu_restore_memory_of_gpu(struct kfd_process_device *pdd,
 		}
 		offset = pdd->dev->adev->rmmio_remap.bus_addr;
 		if (!offset || (PAGE_SIZE > 4096)) {
-			pr_err("amdgpu_amdkfd_get_mmio_remap_phys_addr failed\n");
+			pr_err("%s: amdgpu_amdkfd_get_mmio_remap_phys_addr failed off:0x%llx, page_size:%lu\n",
+				__func__, offset, PAGE_SIZE);
 			return -ENOMEM;
 		}
 	} else if (bo_bucket->alloc_flags & KFD_IOC_ALLOC_MEM_FLAGS_USERPTR) {
@@ -3367,8 +3370,11 @@ static int kfd_mmio_mmap(struct kfd_node *dev, struct kfd_process *process,
 	if (vma->vm_end - vma->vm_start != PAGE_SIZE)
 		return -EINVAL;
 
-	if (PAGE_SIZE > 4096)
+	if (PAGE_SIZE > 4096) {
+		pr_err("%s: MMIO mmap not supported with PAGE_SIZE=%lu (requires 4K)\n",
+			__func__, PAGE_SIZE);
 		return -EINVAL;
+	}
 
 	address = dev->adev->rmmio_remap.bus_addr;
 
