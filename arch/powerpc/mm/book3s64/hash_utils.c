@@ -47,6 +47,7 @@
 #include <asm/mmu.h>
 #include <asm/mmu_context.h>
 #include <asm/page.h>
+#include <asm/pgalloc.h>
 #include <asm/types.h>
 #include <linux/uaccess.h>
 #include <asm/machdep.h>
@@ -459,6 +460,7 @@ static __init void hash_kfence_map_pool(void)
 	BUG_ON(htab_bolt_mapping(kfence_pool_start, kfence_pool_end,
 				    kfence_pool, prot, mmu_linear_psize,
 				    mmu_kernel_ssize));
+	update_page_count(mmu_linear_psize, KFENCE_POOL_SIZE >> PAGE_SHIFT);
 	memblock_clear_nomap(kfence_pool, KFENCE_POOL_SIZE);
 }
 
@@ -1251,6 +1253,7 @@ int hash__create_section_mapping(unsigned long start, unsigned long end,
 					      mmu_kernel_ssize);
 		BUG_ON(rc2 && (rc2 != -ENOENT));
 	}
+	update_page_count(mmu_linear_psize, (end - start) >> PAGE_SHIFT);
 	return rc;
 }
 
@@ -1262,6 +1265,9 @@ int hash__remove_section_mapping(unsigned long start, unsigned long end)
 	if (resize_hpt_for_hotplug(memblock_phys_mem_size()) == -ENOSPC)
 		pr_warn("Hash collision while resizing HPT\n");
 
+	if (!rc)
+		update_page_count(mmu_linear_psize,
+				  - ((end - start) >> PAGE_SHIFT));
 	return rc;
 }
 #endif /* CONFIG_MEMORY_HOTPLUG */
@@ -1404,6 +1410,8 @@ static void __init htab_initialize(void)
 
 		BUG_ON(htab_bolt_mapping(base, base + size, __pa(base),
 				prot, mmu_linear_psize, mmu_kernel_ssize));
+
+		update_page_count(mmu_linear_psize, size >> PAGE_SHIFT);
 	}
 	hash_kfence_map_pool();
 	memblock_set_current_limit(MEMBLOCK_ALLOC_ANYWHERE);
