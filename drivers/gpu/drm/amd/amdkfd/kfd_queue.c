@@ -207,11 +207,8 @@ int kfd_queue_buffer_get(struct amdgpu_vm *vm, void __user *addr, struct amdgpu_
 	if (!mapping)
 		goto out_err;
 
-	if (user_addr != mapping->start ||
-	    (size != 0 && user_addr + size - 1 != mapping->last)) {
-		pr_debug("expected size 0x%llx not equal to mapping addr 0x%llx size 0x%llx\n",
-			expected_size, mapping->start << AMDGPU_GPU_PAGE_SHIFT,
-			(mapping->last - mapping->start + 1) << AMDGPU_GPU_PAGE_SHIFT);
+	if ((user_addr != mapping->start) || (!size)) {
+		pr_debug("user address not equal to BO mapping start or expected size is 0\n");
 		goto out_err;
 	}
 
