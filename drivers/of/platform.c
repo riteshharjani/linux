@@ -557,6 +557,7 @@ static int __init of_platform_default_populate_init(void)
 				of_platform_device_create(node, buf, NULL);
 		}
 
+		of_platform_default_populate(NULL, NULL, NULL);
 	} else {
 		/*
 		 * Handle certain compatibles explicitly, since we don't want to create
