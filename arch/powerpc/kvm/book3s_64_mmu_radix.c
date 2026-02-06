@@ -768,7 +768,24 @@ int kvmppc_create_pte(struct kvm *kvm, pgd_t *pgtable, pte_t pte,
 			goto out_unlock;
 		}
 		/* Valid page here already, add our extra bits */
-		WARN_ON_ONCE((pte_val(*ptep) ^ pte_val(pte)) &
+               {
+                       unsigned long diff = (pte_val(*ptep) ^ pte_val(pte)) &
+                                            PTE_BITS_MUST_MATCH;
+                       if (diff) {
+                               pr_warn("KVM radix: same GPA 0x%lx mapped with conflicting PTEs: existing=0x%lx new=0x%lx diff(must_match)=0x%lx (PFN: old=0x%lx new=0x%lx)\n",
+                                       gpa, pte_val(*ptep), pte_val(pte), diff,
+                                       (unsigned long)pte_pfn(*ptep),
+                                       (unsigned long)pte_pfn(pte));
+                               if (diff & _PAGE_EXEC)
+                                       pr_warn("  -> _PAGE_EXEC differs\n");
+                               if (diff & _PAGE_READ)
+                                       pr_warn("  -> _PAGE_READ differs\n");
+                               if (diff & _PAGE_PRIVILEGED)
+                                       pr_warn("  -> _PAGE_PRIVILEGED differs\n");
+                       }
+               }
+
+		WARN_ON((pte_val(*ptep) ^ pte_val(pte)) &
 							PTE_BITS_MUST_MATCH);
 		kvmppc_radix_update_pte(kvm, ptep, 0, pte_val(pte), gpa, 0);
 		ret = 0;
