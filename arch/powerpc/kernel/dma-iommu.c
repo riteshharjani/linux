@@ -65,21 +65,6 @@ bool arch_dma_unmap_sg_direct(struct device *dev, struct scatterlist *sg,
 
 	return true;
 }
-bool arch_dma_alloc_direct(struct device *dev)
-{
-	if (dev->dma_ops_bypass)
-		return true;
-
-	return false;
-}
-
-bool arch_dma_free_direct(struct device *dev, dma_addr_t dma_handle)
-{
-	if (!dev->dma_ops_bypass)
-		return false;
-
-	return is_direct_handle(dev, dma_handle);
-}
 #endif /* CONFIG_ARCH_HAS_DMA_MAP_DIRECT */
 
 /*
